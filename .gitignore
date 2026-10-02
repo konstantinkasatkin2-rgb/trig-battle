@@ -3,3 +3,7 @@ __pycache__/
 android/.buildozer/
 android/bin/
 .kivy/
+build/
+dist/
+*.spec
+apk-download/
