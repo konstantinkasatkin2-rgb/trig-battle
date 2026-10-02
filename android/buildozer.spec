@@ -37,6 +37,9 @@ fullscreen = 0
 # (int) Minimum API your APK / AAB will support.
 #android.minapi = 21
 
+# (bool) Automatically accept Android SDK licenses (needed for CI builds)
+android.accept_sdk_license = True
+
 # (str) Android NDK version to use
 #android.ndk = 25b
 
