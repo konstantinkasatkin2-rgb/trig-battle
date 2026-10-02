@@ -30,7 +30,9 @@ jobs:
       - name: Cache buildozer
         uses: actions/cache@v4
         with:
-          path: android/.buildozer
+          path: |
+            android/.buildozer
+            ~/.buildozer
           key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
 
       - name: Build APK
