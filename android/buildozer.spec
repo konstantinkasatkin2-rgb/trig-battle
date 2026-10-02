@@ -40,6 +40,10 @@ fullscreen = 0
 # (bool) Automatically accept Android SDK licenses (needed for CI builds)
 android.accept_sdk_license = True
 
+# (str) python-for-android branch: develop contains fixes for pip
+# android-wheel tags ("not a supported wheel on this platform")
+p4a.branch = develop
+
 # (str) Android NDK version to use
 #android.ndk = 25b
 
