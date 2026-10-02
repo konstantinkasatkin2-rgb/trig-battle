@@ -10,7 +10,9 @@ import random
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.core.text import Label as CoreLabel
 from kivy.graphics import Color, Line, Rectangle, Ellipse
+from kivy.metrics import sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
@@ -125,6 +127,10 @@ def snap(v):
 
 # ===================== ИГРОВОЕ ПОЛЕ (виджет) =====================
 class BoardWidget(Widget):
+    """Игровое поле в стиле настольной matplotlib-версии."""
+
+    FADE = 0.15   # прозрачность "второстепенных" элементов
+
     def __init__(self, app, side, **kw):
         super().__init__(**kw)
         self.app = app
@@ -132,6 +138,7 @@ class BoardWidget(Widget):
         self.bind(size=lambda *a: self.redraw(),
                   pos=lambda *a: self.redraw())
 
+    # ---------- координаты ----------
     def to_px(self, x, y):
         s = min(self.width, self.height) * 0.96
         cx, cy = self.center_x, self.center_y
@@ -142,6 +149,40 @@ class BoardWidget(Widget):
         return ((px - self.center_x) / s * 2 * LIMIT,
                 (py - self.center_y) / s * 2 * LIMIT)
 
+    # ---------- текст ----------
+    def _texture(self, s, size, color, bold=False):
+        lbl = CoreLabel(text=s, font_size=sp(size), color=color,
+                        bold=bold, font_name='DejaVuSans')
+        lbl.refresh()
+        return lbl.texture
+
+    def draw_text(self, x, y, s, color=(0, 0, 0, 1), size=11,
+                  anchor='mm', bold=False):
+        tex = self._texture(s, size, color, bold)
+        w, h = tex.size
+        px, py = self.to_px(x, y)
+        ox = {'l': 0, 'm': -w / 2, 'r': -w}[anchor[0]]
+        oy = {'b': 0, 'm': -h / 2, 't': -h}[anchor[1]]
+        Rectangle(texture=tex, pos=(px + ox, py + oy), size=(w, h))
+
+    def panel_px(self, px, py, lines, fg=(0, 0, 0, 1), bg=(1, 1, 1, 0.92),
+                 border=(0.5, 0.5, 0.5, 1), anchor='rt', size=10):
+        textures = [self._texture(ln, size, fg) for ln in lines]
+        w = max(t.size[0] for t in textures) + 12
+        h = sum(t.size[1] for t in textures) + 12
+        x0 = px - w if 'r' in anchor else px
+        y0 = py - h if 't' in anchor else py
+        Color(*bg)
+        Rectangle(pos=(x0, y0), size=(w, h))
+        Color(*border)
+        Line(rectangle=(x0, y0, w, h), width=1)
+        yy = y0 + 6
+        for t in textures:
+            Color(*fg)
+            Rectangle(texture=t, pos=(x0 + 6, yy), size=t.size)
+            yy += t.size[1]
+
+    # ---------- фигуры ----------
     def draw_x(self, px, py, r, w=2.0):
         Line(points=[px - r, py - r, px + r, py + r], width=w)
         Line(points=[px - r, py + r, px + r, py - r], width=w)
@@ -152,18 +193,30 @@ class BoardWidget(Widget):
             dx, dy = math.cos(a) * r, math.sin(a) * r
             Line(points=[px - dx, py - dy, px + dx, py + dy], width=2.2)
 
+    def draw_arrow(self, x1, y1, x2, y2, color):
+        Color(*color)
+        p1 = self.to_px(x1, y1)
+        p2 = self.to_px(x2, y2)
+        Line(points=[*p1, *p2], width=1.4)
+        ang = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+        for da in (2.6, -2.6):
+            Line(points=[p2[0], p2[1], p2[0] - 10 * math.cos(ang + da),
+                         p2[1] - 10 * math.sin(ang + da)], width=1.4)
+
+    # ---------- основная отрисовка ----------
     def redraw(self):
         app = self.app
         if self.width <= 1:
             return
         fld = app.FL if self.side == 'L' else app.FR
+        F = self.FADE
         self.canvas.clear()
         with self.canvas:
             Color(1, 1, 1, 1)
             Rectangle(pos=self.pos, size=self.size)
 
-            # сетка (клетки)
-            Color(0.75, 0.75, 0.75, 1)
+            # клетки
+            Color(0.7, 0.7, 0.7, 0.5)
             for i in range(-16, 17):
                 v = i / 10.0
                 x1, y1 = self.to_px(v, -LIMIT)
@@ -173,25 +226,34 @@ class BoardWidget(Widget):
                 x2, y2 = self.to_px(LIMIT, v)
                 Line(points=[x1, y1, x2, y2], width=0.4)
 
-            # оси (приглушённые)
-            Color(0, 0, 0, 0.15)
-            x1, y1 = self.to_px(-LIMIT, 0)
-            x2, y2 = self.to_px(LIMIT, 0)
-            Line(points=[x1, y1, x2, y2], width=1.2)
-            x1, y1 = self.to_px(0, -LIMIT)
-            x2, y2 = self.to_px(0, LIMIT)
-            Line(points=[x1, y1, x2, y2], width=1.2)
-            # оси tg/ctg (приглушённые)
-            Color(1, 0, 0, 0.15)
-            x1, y1 = self.to_px(1, -LIMIT)
-            x2, y2 = self.to_px(1, LIMIT)
-            Line(points=[x1, y1, x2, y2], width=1.2)
-            Color(0, 0.7, 0, 0.15)
-            x1, y1 = self.to_px(-LIMIT, 1)
-            x2, y2 = self.to_px(LIMIT, 1)
-            Line(points=[x1, y1, x2, y2], width=1.2)
+            # оси со стрелками (прозрачные)
+            self.draw_arrow(-LIMIT, 0, LIMIT, 0, (0, 0, 0, F))
+            self.draw_arrow(0, -LIMIT, 0, LIMIT, (0, 0, 0, F))
+            self.draw_text(LIMIT - 0.3, -0.12, 'x (ось абсцисс)',
+                           (0, 0, 0, F), 9, bold=True)
+            self.draw_text(0.06, LIMIT - 0.1, 'y (ось ординат)',
+                           (0, 0, 0, F), 9, anchor='lm', bold=True)
 
-            # окружность и квадраты
+            # ось тангенсов / котангенсов (прозрачные)
+            Color(1, 0, 0, F)
+            Line(points=[*self.to_px(1, -LIMIT), *self.to_px(1, LIMIT)],
+                 width=1.5)
+            Color(0, 0.7, 0, F)
+            Line(points=[*self.to_px(-LIMIT, 1), *self.to_px(LIMIT, 1)],
+                 width=1.5)
+            self.draw_text(1.0, -LIMIT + 0.04, 'ось тангенсов',
+                           (1, 0, 0, F), 8, anchor='mb')
+            self.draw_text(-LIMIT + 0.04, 1.05, 'ось котангенсов',
+                           (0, 0.6, 0, F), 8, anchor='lb')
+
+            # подписи делений 0.1 (прозрачные), от -1.0 до 1.0
+            for i in range(-10, 11):
+                v = round(i / 10, 1)
+                lbl = f'{v + 0.0:.1f}'
+                self.draw_text(v, -0.03, lbl, (0, 0, 0, F), 6.5, anchor='mt')
+                self.draw_text(0.02, v, lbl, (0, 0, 0, F), 6.5, anchor='lb')
+
+            # окружность и квадраты (непрозрачные)
             cx, cy = self.to_px(0, 0)
             r = abs(self.to_px(1, 0)[0] - cx)
             Color(0, 0, 0.9, 1)
@@ -210,7 +272,10 @@ class BoardWidget(Widget):
             gh = app.ghost_pts(self.side)
             if gh:
                 ok = app.ghost_ok(self.side)
-                Color(0.1, 0.8, 0.1, 0.6) if ok else Color(0.9, 0.1, 0.1, 0.6)
+                if ok:
+                    Color(0.1, 0.8, 0.1, 0.6)
+                else:
+                    Color(0.9, 0.1, 0.1, 0.6)
                 pts = [self.to_px(*q) for q in gh]
                 Line(points=[c for pt in pts for c in pt], width=3)
                 for px, py in pts:
@@ -256,24 +321,108 @@ class BoardWidget(Widget):
                     px, py = self.to_px(*q)
                     self.draw_x(px, py, 8, 3)
 
-            # прицел (лучи и точки P1/P2) — только на активном поле в бою
-            if app.aim_side() == self.side and app.game['phase'] == 'battle':
-                a1, a2 = math.radians(app.slider1.value), \
-                    math.radians(app.slider2.value)
-                c1, s1 = math.cos(a1), math.sin(a1)
-                Color(0.6, 0.1, 0.8, 1)
-                Line(points=[cx, cy, *self.to_px(c1, s1)], width=2)
-                c2, s2 = math.cos(a2), math.sin(a2)
-                Color(0.85, 0.55, 0.0, 1)
-                Line(points=[cx, cy, *self.to_px(c2, s2)], width=2)
-                if app.state['P1'] is not None:
-                    px, py = self.to_px(*app.state['P1'])
-                    Color(0, 0, 0, 1)
-                    self.draw_star(px, py, 10)
-                if app.state['P2'] is not None:
-                    px, py = self.to_px(*app.state['P2'])
-                    Color(0, 0.5, 0.15, 1)
-                    self.draw_star(px, py, 10)
+            # прицел в стиле настольной версии
+            if app.aim_side() == self.side and \
+                    app.game['phase'] == 'battle':
+                self.draw_aim(app, cx, cy, r)
+
+    # ---------- прицел (как на ПК) ----------
+    def draw_aim(self, app, cx, cy, r_circle):
+        F = self.FADE
+        a1 = math.radians(app.slider1.value)
+        a2 = math.radians(app.slider2.value)
+        c1, s1 = math.cos(a1), math.sin(a1)
+        c2, s2 = math.cos(a2), math.sin(a2)
+        r_arc = r_circle * 0.25
+
+        # --- угол 1: луч, дуга, проекции ---
+        Color(0.6, 0.1, 0.8, 1)
+        Line(points=[cx, cy, *self.to_px(c1, s1)], width=2)
+        Line(circle=(cx, cy, r_arc, 0, app.slider1.value), width=1.2)
+        p1x, p1y = self.to_px(c1, s1)
+        Ellipse(pos=(p1x - 4, p1y - 4), size=(8, 8))
+        self.draw_text(0.34 * math.cos(a1 / 2), 0.34 * math.sin(a1 / 2),
+                       f'{int(app.slider1.value)}°', (0.6, 0.1, 0.8, 1), 9)
+        Color(0, 0, 1, F)
+        Line(points=[*self.to_px(c1, 0), *self.to_px(c1, s1)], width=1.2)
+        Line(points=[*self.to_px(0, s1), *self.to_px(c1, s1)], width=1.2)
+        self.draw_text(c1 - 0.04, -0.1, f'cos={c1:.2f}', (0, 0, 1, F), 8)
+        self.draw_text(-0.03, s1, f'sin={s1:.2f}', (0, 0, 1, F), 8,
+                       anchor='rm')
+
+        # --- угол 2: луч, дуга, проекции ---
+        Color(0.85, 0.55, 0.0, 1)
+        Line(points=[cx, cy, *self.to_px(c2, s2)], width=2)
+        Line(circle=(cx, cy, r_arc, 0, app.slider2.value), width=1.2)
+        p2x, p2y = self.to_px(c2, s2)
+        Ellipse(pos=(p2x - 4, p2y - 4), size=(8, 8))
+        self.draw_text(0.34 * math.cos(a2 / 2), 0.34 * math.sin(a2 / 2),
+                       f'{int(app.slider2.value)}°', (0.85, 0.55, 0.0, 1), 9)
+        Color(0.5, 0.5, 0.5, F)
+        Line(points=[*self.to_px(c2, 0), *self.to_px(c2, s2)], width=1.2)
+        Line(points=[*self.to_px(0, s2), *self.to_px(c2, s2)], width=1.2)
+
+        # --- линии tg/ctg до границы квадрата (прозрачные) ---
+        for c, s in ((c1, s1), (c2, s2)):
+            m = max(abs(c), abs(s))
+            bx, by = (c / m, s / m) if m > 0 else (0.0, 0.0)
+            Color(1, 0, 0, F)
+            Line(points=[cx, cy, *self.to_px(bx, by)], width=1.2)
+            Color(0, 0.7, 0, F)
+            Line(points=[cx, cy, *self.to_px(bx, by)], width=1.2)
+
+        # --- маркеры tg/ctg на осях (прозрачные) ---
+        if abs(c2) > 1e-9:
+            tg2 = s2 / c2
+            if abs(tg2) <= LIMIT:
+                px, py = self.to_px(1, tg2)
+                Color(1, 0, 0, F)
+                Line(rectangle=(px - 4, py - 4, 8, 8), width=1.6)
+        if abs(s2) > 1e-9:
+            ctg2 = c2 / s2
+            if abs(ctg2) <= LIMIT:
+                px, py = self.to_px(ctg2, 1)
+                Color(0, 0.7, 0, F)
+                Line(points=[px, py + 5, px - 4, py - 3, px + 4, py - 3],
+                     close=True, width=1.6)
+
+        # --- точки пересечения P1 / P2 ---
+        if app.state['P1'] is not None:
+            Px, Py = app.state['P1']
+            if -LIMIT <= Px <= LIMIT and -LIMIT <= Py <= LIMIT:
+                px, py = self.to_px(Px, Py)
+                Color(0, 0, 0, 1)
+                self.draw_star(px, py, 10)
+                self.draw_text(Px + 0.05, Py,
+                               f'P₁ = ({Px:.2f}, {Py:.2f})',
+                               (0, 0, 0, 1), 8, anchor='lm', bold=True)
+        if app.state['P2'] is not None:
+            Qx, Qy = app.state['P2']
+            if -LIMIT <= Qx <= LIMIT and -LIMIT <= Qy <= LIMIT:
+                px, py = self.to_px(Qx, Qy)
+                Color(0, 0.5, 0.15, 1)
+                self.draw_star(px, py, 10)
+                self.draw_text(Qx + 0.05, Qy,
+                               f'P₂ = ({Qx:.2f}, {Qy:.2f})',
+                               (0, 0.5, 0.15, 1), 8, anchor='lm', bold=True)
+
+        # --- инфо-панель (как на ПК) ---
+        tg2s = f'{s2 / c2: .2f}' if abs(c2) > 1e-9 else '   —'
+        ctg2s = f'{c2 / s2: .2f}' if abs(s2) > 1e-9 else '   —'
+        p1s = (f'({app.state["P1"][0]: .2f}, {app.state["P1"][1]: .2f})'
+               if app.state['P1'] else 'нет')
+        p2s = (f'({app.state["P2"][0]: .2f}, {app.state["P2"][1]: .2f})'
+               if app.state['P2'] else 'нет')
+        lines = [
+            f'угол 1 = {app.slider1.value:5.1f}°',
+            f'  sin={s1: .2f} cos={c1: .2f}',
+            f'угол 2 = {app.slider2.value:5.1f}°',
+            f'  tg ={tg2s} ctg={ctg2s}',
+            f'P₁ = {p1s}',
+            f'P₂ = {p2s}',
+        ]
+        self.panel_px(self.x + self.width - 6, self.y + self.height - 6,
+                      lines, anchor='rt', size=9)
 
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos):
@@ -487,12 +636,12 @@ class TrigBattleApp(App):
         mid = BoxLayout(size_hint_y=0.585, spacing=6)
         self.boardL = BoardWidget(self, 'L')
         self.boardR = BoardWidget(self, 'R')
-        self.panelL = Label(text='', size_hint_x=0.18, font_size='11sp',
+        self.panelL = Label(text='', size_hint_x=0.18, font_size='12sp',
                             color=(0, 0, 0, 1), halign='left',
-                            valign='top')
-        self.panelR = Label(text='', size_hint_x=0.18, font_size='11sp',
+                            valign='top', font_name='DejaVuSans')
+        self.panelR = Label(text='', size_hint_x=0.18, font_size='12sp',
                             color=(0, 0, 0, 1), halign='left',
-                            valign='top')
+                            valign='top', font_name='DejaVuSans')
         self.panelL.bind(size=lambda i, v: setattr(i, 'text_size', v))
         self.panelR.bind(size=lambda i, v: setattr(i, 'text_size', v))
         mid.add_widget(self.panelL)
@@ -964,13 +1113,15 @@ class TrigBattleApp(App):
     def build_lines(self, units, title):
         fsh, fpl = self.fleets()
         rem = self.remaining(units)
-        lines = [title,
-                 'К: ' + ' '.join(f'{s}:{rem["ship"][s]}/{fsh[s]}'
-                                  for s in sorted(fsh))]
-        if fpl:
-            lines.append('С: ' + ' '.join(f'{s}:{rem["plane"][s]}/{fpl[s]}'
-                                          for s in sorted(fpl)))
-        else:
+        lines = [title]
+        for s in sorted(fsh):
+            row = f'{s}: {"■" * rem["ship"][s]}' \
+                  f'{"□" * (fsh[s] - rem["ship"][s])}'
+            if fpl and s in fpl:
+                row += f' {"▲" * rem["plane"][s]}' \
+                       f'{"△" * (fpl[s] - rem["plane"][s])}'
+            lines.append(row)
+        if not fpl:
             lines.append('самолёты выкл.')
         return lines
 
@@ -981,12 +1132,12 @@ class TrigBattleApp(App):
         for un in units:
             if not is_sunk(un):
                 alive[un['type']][un['size']] += 1
-        lines = [title,
-                 'К: ' + ' '.join(f'{s}:{alive["ship"][s]}'
-                                  for s in sorted(fsh))]
-        if fpl:
-            lines.append('С: ' + ' '.join(f'{s}:{alive["plane"][s]}'
-                                          for s in sorted(fpl)))
+        lines = [title]
+        for s in sorted(fsh):
+            row = f'{s}: {"■" * alive["ship"][s]}'
+            if fpl and s in fpl:
+                row += f' {"▲" * alive["plane"][s]}'
+            lines.append(row)
         hits = sum(len(un['hits']) for un in units)
         sunks = sum(1 for un in units if is_sunk(un))
         lines.append(f'подбито {hits}, потопл. {sunks}')
