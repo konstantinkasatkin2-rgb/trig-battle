@@ -1,0 +1,43 @@
+name: Build Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf \
+            libtool pkg-config zlib1g-dev libncurses-dev libffi-dev \
+            libssl-dev cmake
+
+      - name: Install Buildozer
+        run: pip install --upgrade buildozer cython
+
+      - name: Cache buildozer
+        uses: actions/cache@v4
+        with:
+          path: android/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
+
+      - name: Build APK
+        run: cd android && buildozer android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: trig-battle-apk
+          path: android/bin/*.apk
