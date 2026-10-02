@@ -638,6 +638,12 @@ def enemy_turn():
         game['phase'] = 'over'
         set_msg('ПРОТИВНИК ПОБЕДИЛ. Все ваши юниты потоплены.', 'darkred')
         apply_visibility()
+    elif result in ('hit', 'sunk'):
+        # ПРАВИЛО 6 (для ИИ): попадание -> игрок пропускает ход
+        set_msg(f'Противник попал ({cell[0]:.1f}, {cell[1]:.1f}) — '
+                f'вы пропускаете ход!', 'darkred')
+        plt.pause(0.7)
+        enemy_turn()
 
 
 # ===================== ХОД ИГРЫ =====================
@@ -682,24 +688,36 @@ def make_move(_=None):
         apply_visibility()
         return
 
+    # ПРАВИЛО 6: попадание -> соперник пропускает ход (стрелок ходит снова)
+    extra_turn = result in ('hit', 'sunk')
+
     if game['mode'] == 'ai':
-        set_msg(f'Ваш ход ({shot_sel["p"]}): {res_txt}  '
-                f'Теперь ход противника...')
-        game['turn'] = 'enemy'
-        fig.canvas.draw_idle()
-        plt.pause(0.5)
-        enemy_turn()
-        if game['phase'] == 'battle':
-            game['turn'] = 'player1'
-            set_msg(f'ВАШ ХОД ({shot_sel["p"]}). Последний выстрел: '
-                    f'{res_txt}', 'darkgreen')
+        if extra_turn:
+            set_msg(f'{res_txt} Противник пропускает ход — '
+                    f'стреляйте ещё раз!', 'darkgreen')
+        else:
+            set_msg(f'Ваш ход ({shot_sel["p"]}): {res_txt}  '
+                    f'Теперь ход противника...')
+            game['turn'] = 'enemy'
+            fig.canvas.draw_idle()
+            plt.pause(0.5)
+            enemy_turn()
+            if game['phase'] == 'battle':
+                game['turn'] = 'player1'
+                set_msg(f'ВАШ ХОД ({shot_sel["p"]}). Последний выстрел: '
+                        f'{res_txt}', 'darkgreen')
     else:
-        game['turn'] = 'player2' if game['turn'] == 'player1' else 'player1'
-        nxt = 'Игрок 1' if game['turn'] == 'player1' else 'Игрок 2'
-        side = 'правом' if game['turn'] == 'player1' else 'левом'
-        set_msg(f'{shooter}: {res_txt}   →   ХОД {nxt.upper()}А '
-                f'(прицел на {side} поле)', 'darkgreen')
-        apply_visibility()
+        if extra_turn:
+            set_msg(f'{shooter}: {res_txt} Соперник пропускает ход — '
+                    f'{shooter} ходит снова!', 'darkgreen')
+        else:
+            game['turn'] = 'player2' if game['turn'] == 'player1' \
+                else 'player1'
+            nxt = 'Игрок 1' if game['turn'] == 'player1' else 'Игрок 2'
+            side = 'правом' if game['turn'] == 'player1' else 'левом'
+            set_msg(f'{shooter}: {res_txt}   →   ХОД {nxt.upper()}А '
+                    f'(прицел на {side} поле)', 'darkgreen')
+            apply_visibility()
     update_panels()
     update_all()
 
@@ -1131,7 +1149,8 @@ RULES = ('Правила\n\n'
          '3 - Корабли можно ставить лишь в пределах единичной окружности\n\n'
          '4 - Самолеты могут стоять лишь в пределах квадрата, но не в '
          'пределах единичной окружности.\n\n'
-         '5 - Точка атаки может быть лишь в границах квадрата')
+         '5 - Точка атаки может быть лишь в границах квадрата\n\n'
+         '6 - При попадании по вражескому кораблю враг пропускает ход')
 ui_text('rules', 0.5, 0.62, RULES, fontsize=13)
 ui_button('rules', 0.38, 0.08, 0.24, 0.08, 'Назад',
           lambda: show_screen('menu'), color='lightgray')

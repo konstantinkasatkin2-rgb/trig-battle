@@ -47,7 +47,8 @@ RULES = ('Правила\n\n'
          '3 - Корабли можно ставить лишь в пределах единичной окружности\n\n'
          '4 - Самолеты могут стоять лишь в пределах квадрата, но не в '
          'пределах единичной окружности.\n\n'
-         '5 - Точка атаки может быть лишь в границах квадрата')
+         '5 - Точка атаки может быть лишь в границах квадрата\n\n'
+         '6 - При попадании по вражескому кораблю враг пропускает ход')
 
 
 # ===================== ИГРОВАЯ ЛОГИКА =====================
@@ -422,8 +423,10 @@ class TrigBattleApp(App):
         # --- правила ---
         scr = Screen(name='rules')
         lay = BoxLayout(orientation='vertical', padding=30, spacing=10)
-        lay.add_widget(Label(text=RULES, font_size='15sp',
-                             color=(0, 0, 0, 1)))
+        rules_lbl = Label(text=RULES, font_size='15sp',
+                          color=(0, 0, 0, 1), halign='left', valign='top')
+        rules_lbl.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        lay.add_widget(rules_lbl)
         b = Button(text='Назад', size_hint_y=None, height='55dp')
         b.bind(on_release=lambda *_: self.go('menu'))
         lay.add_widget(b)
@@ -847,18 +850,32 @@ class TrigBattleApp(App):
             self.redraw_all()
             return
 
+        # ПРАВИЛО 6: попадание -> соперник пропускает ход
+        extra_turn = result in ('hit', 'sunk')
+
         if g['mode'] == 'ai':
-            g['turn'] = 'enemy'
-            self.set_msg(f'{res_txt}  Ход противника...')
-            self.update_panels()
-            self.redraw_all()
-            Clock.schedule_once(self.enemy_turn, 0.8)
+            if extra_turn:
+                self.set_msg(f'{res_txt} Противник пропускает ход — '
+                             f'стреляйте ещё раз!', (0, 0.5, 0, 1))
+                self.update_panels()
+                self.redraw_all()
+            else:
+                g['turn'] = 'enemy'
+                self.set_msg(f'{res_txt}  Ход противника...')
+                self.update_panels()
+                self.redraw_all()
+                Clock.schedule_once(self.enemy_turn, 0.8)
         else:
-            g['turn'] = 'player2' if g['turn'] == 'player1' else 'player1'
-            nxt = 'ИГРОКА 1' if g['turn'] == 'player1' else 'ИГРОКА 2'
-            side = 'правом' if g['turn'] == 'player1' else 'левом'
-            self.set_msg(f'{shooter}: {res_txt}   →   ХОД {nxt} '
-                         f'(прицел на {side} поле)', (0, 0.5, 0, 1))
+            if extra_turn:
+                self.set_msg(f'{shooter}: {res_txt} Соперник пропускает '
+                             f'ход — {shooter} ходит снова!', (0, 0.5, 0, 1))
+            else:
+                g['turn'] = 'player2' if g['turn'] == 'player1' \
+                    else 'player1'
+                nxt = 'ИГРОКА 1' if g['turn'] == 'player1' else 'ИГРОКА 2'
+                side = 'правом' if g['turn'] == 'player1' else 'левом'
+                self.set_msg(f'{shooter}: {res_txt}   →   ХОД {nxt} '
+                             f'(прицел на {side} поле)', (0, 0.5, 0, 1))
             self.update_panels()
             self.redraw_all()
 
@@ -921,18 +938,27 @@ class TrigBattleApp(App):
         if result == 'sunk':
             self.enemy_ai['thits'] = []
 
+        txt = {'hit': 'ПОПАДАНИЕ!', 'sunk': 'ВАШ ЮНИТ ПОТОПЛЕН!',
+               'miss': 'мимо'}[result]
         if all_sunk(self.FL['units']):
             g['phase'] = 'over'
             self.set_msg('ПРОТИВНИК ПОБЕДИЛ. Все ваши юниты потоплены.',
                          (0.7, 0, 0, 1))
+            self.update_panels()
+            self.redraw_all()
+        elif result in ('hit', 'sunk'):
+            # ПРАВИЛО 6 (для ИИ): попадание -> игрок пропускает ход
+            self.set_msg(f'Противник ({cell[0]:.1f}, {cell[1]:.1f}) — '
+                         f'{txt} Вы пропускаете ход!', (0.7, 0, 0, 1))
+            self.update_panels()
+            self.redraw_all()
+            Clock.schedule_once(self.enemy_turn, 0.9)
         else:
             g['turn'] = 'player1'
-            txt = {'hit': 'ПОПАДАНИЕ!', 'sunk': 'ВАШ ЮНИТ ПОТОПЛЕН!',
-                   'miss': 'мимо'}[result]
             self.set_msg(f'Противник ({cell[0]:.1f}, {cell[1]:.1f}) — '
                          f'{txt}   ВАШ ХОД.', (0, 0.5, 0, 1))
-        self.update_panels()
-        self.redraw_all()
+            self.update_panels()
+            self.redraw_all()
 
     # ---------- панели и перерисовка ----------
     def build_lines(self, units, title):
