@@ -44,10 +44,6 @@ android.accept_sdk_license = True
 # android-wheel tags ("not a supported wheel on this platform")
 p4a.branch = develop
 
-# (str) Android SDK path: use GitHub runner's preinstalled SDK
-# (platform android-33 is already there, licenses accepted)
-android.sdk_path = /usr/local/lib/android/sdk
-
 # (str) Android NDK version to use
 #android.ndk = 25b
 

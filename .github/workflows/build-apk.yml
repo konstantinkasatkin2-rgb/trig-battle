@@ -35,9 +35,6 @@ jobs:
             ~/.buildozer
           key: buildozer-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
 
-      - name: Fix sdkmanager path for buildozer
-        run: sudo ln -sfn /usr/local/lib/android/sdk/cmdline-tools/latest /usr/local/lib/android/sdk/tools
-
       - name: Build APK
         run: cd android && buildozer android debug
 
