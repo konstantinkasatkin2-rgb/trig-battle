@@ -78,6 +78,12 @@ jobs:
         working-directory: ready_apk
         run: python tools/test_recipe.py
 
+      # Тот же приём для правки рецепта pygame: без simd_blitters_*.c в
+      # `surface` APK собирается зелёным, а display не грузится на телефоне.
+      - name: Sanity check (рецепт pygame: simd_blitters в surface)
+        working-directory: ready_apk
+        run: python tools/test_pygame_recipe.py
+
       - name: Build APK
         working-directory: ready_apk
         run: buildozer android debug

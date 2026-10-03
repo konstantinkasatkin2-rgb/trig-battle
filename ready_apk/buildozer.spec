@@ -18,7 +18,10 @@ source.include_exts = py,png,jpg,jpeg,ttf,otf,json
 source.include_patterns = *.py,*.pyc,*.png,*.jpg,*.jpeg,*.json,*.ttf,*.otf
 
 # (str) Application versioning
-version = 0.2.1
+# Версия 0.2.1: APK собирался и запускался, но падал при старте —
+# pygame не мог загрузить display (см. p4a-recipes/pygame/__init__.py,
+# fix_surface_sources). 0.2.2 — с этим исправлением.
+version = 0.2.2
 
 # (list) Application requirements.
 # pygame собирается python-for-android из исходников и требует SDL2-модулей.

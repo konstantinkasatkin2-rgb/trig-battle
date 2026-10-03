@@ -61,6 +61,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade buildozer cython
 
+      - name: Sanity checks (рецепты)
+        working-directory: ready_apk
+        run: |
+          python tools/test_recipe.py
+          python tools/test_pygame_recipe.py
+
       - name: Switch spec to x86_64
         working-directory: ready_apk
         run: |

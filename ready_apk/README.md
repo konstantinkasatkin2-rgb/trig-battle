@@ -58,6 +58,47 @@ Android запускает лаунчер, он делает `import main`. Ес
 Обе ошибки ловятся за секунду проверкой `python tools/test_recipe.py`, которая
 запускается в CI **перед** девятиминутной сборкой.
 
+## Второй грабли: pygame не собирается для Android (и это видно только на устройстве)
+
+С версией 0.2.1 APK собирался и запускался, но падал при старте:
+
+```
+NotImplementedError: display module not available
+(ImportError: dlopen failed: cannot locate symbol
+ "alphablit_alpha_sse2_argb_surf_alpha" referenced by ".../pygame/surface.so")
+```
+
+Причина в шаблоне `buildconfig/Setup.Android.SDL2.in` (pygame 2.1.3):
+расширение `surface` собирается из трёх файлов и **не включает**
+`simd_blitters_sse2.c` / `simd_blitters_avx2.c`. При этом `alphablit.c`
+вызывает `alphablit_alpha_sse2_argb_surf_alpha()` и `pg_has_avx2()`
+безусловно, а на aarch64 сам `simd_blitters.h` включает
+`#define PG_ENABLE_ARM_NEON 1` — вызовы компилируются, а определений в
+сборке нет. На настольных платформах те же символы закрыты `__SSE2__`,
+поэтому баг там не проявляется.
+
+Рецепт `p4a-recipes/pygame` дописывает оба файла в строку `surface`
+(`fix_surface_sources`). Сами файлы безопасны для ARM: SIMD-код внутри под
+`#if __SSE2__` / `#if __AVX2__`, а `pg_has_avx2()` без AVX2 возвращает 0.
+Проверка: `python tools/test_pygame_recipe.py` (тоже запускается в CI до
+сборки).
+
+## Как узнать причину падения на устройстве
+
+`main.py` сообщает об ошибке тремя независимыми способами, потому что
+прежний вариант (экран средствами pygame) не срабатывал, если SDL не смог
+открыть окно:
+
+1. файл-журнал `/sdcard/Android/data/org.kasatkin.trigbattle/files/trigbattle.log`;
+2. нативный Toast поверх любых окон Android;
+3. экран средствами pygame, если окно есть.
+
+Всё печатается и в logcat: `adb logcat -s trigbattle python`.
+Плюс есть воркфлоу `.github/workflows/test-emulator.yml`: он собирает APK
+под x86_64, запускает его на эмуляторе Android и печатает в лог прогона
+состояние процесса, скриншот, наш журнал и logcat — причину видно без
+телефона.
+
 ## Почему APK нельзя собрать прямо на Windows
 
 buildozer/python-for-android работают **только на Linux и macOS**. На Windows

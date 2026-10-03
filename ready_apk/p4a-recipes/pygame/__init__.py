@@ -17,13 +17,17 @@ Python 3.11, и Android-шаблон `buildconfig/Setup.Android.SDL2.in` в не
 номер версии, логика сборки остаётся штатной p4a.
 
 Всё остальное (генерация файла Setup, список зависимостей) скопировано
-из рецепта python-for-android без изменений.
+из рецепта python-for-android без изменений — КРОМЕ одного исправления,
+описанного в `fix_surface_sources`.
 """
 
 from os.path import join
 
 from pythonforandroid.recipe import CompiledComponentsPythonRecipe
 from pythonforandroid.toolchain import current_directory
+
+# Файлы с SIMD-блотерами, которые ОБЯЗАНЫ быть в расширении `surface`.
+SIMD_SOURCES = ('src_c/simd_blitters_sse2.c', 'src_c/simd_blitters_avx2.c')
 
 
 class PygameRecipe(CompiledComponentsPythonRecipe):
@@ -82,7 +86,52 @@ class PygameRecipe(CompiledComponentsPythonRecipe):
             png_includes='-I' + png_inc_dir,
             freetype_includes='')
         with open('Setup', 'w') as f:
-            f.write(setup_file)
+            f.write(self.fix_surface_sources(setup_file))
+
+    def fix_surface_sources(self, setup_text):
+        """Добавить simd_blitters_*.c в расширение `surface`.
+
+        Зачем: без этого APK собирается «успешно», но при запуске падает с
+
+            NotImplementedError: display module not available
+            (ImportError: dlopen failed: cannot locate symbol
+             "alphablit_alpha_sse2_argb_surf_alpha" referenced by
+             ".../pygame/surface.so")
+
+        Устройство проблемы (pygame 2.1.3):
+          * `src_c/alphablit.c` на строке вызывает
+            `alphablit_alpha_sse2_argb_surf_alpha` и `pg_has_avx2()`
+            БЕЗ условной компиляции;
+          * эти символы определены в `simd_blitters_sse2.c` и
+            `simd_blitters_avx2.c`;
+          * на aarch64 сам `simd_blitters.h` включает
+            `#define PG_ENABLE_ARM_NEON 1`, поэтому вызовы
+            компилируются, а определения — нет: файлов нет в сборке;
+          * на x86 тот же результат даёт `__SSE2__` из `Setup`
+            на других платформах, поэтому баг не видят.
+
+        Файлы безопасны для ARM: SIMD-код внутри под `#if __SSE2__` /
+        `#if PG_ENABLE_ARM_NEON` / `#if __AVX2__`, а `pg_has_avx2()`
+        без AVX2 возвращает 0. Именно так же поступает штатный
+        buildconfig/Setup на настольных платформах.
+        """
+        lines = setup_text.splitlines()
+        result = []
+        patched = False
+        for line in lines:
+            if line.startswith('surface ') and not line.startswith('#'):
+                for src in SIMD_SOURCES:
+                    if src not in line:
+                        # исходники вставляем перед флагами ($(SDL) и т.п.)
+                        line = line.replace(' $(SDL)', ' %s $(SDL)' % src, 1)
+                patched = True
+            result.append(line)
+        if not patched:
+            raise RuntimeError(
+                'Рецепт pygame: в Setup нет строки расширения `surface` — '
+                'не удалось добавить %s. Проверьте шаблон '
+                'buildconfig/Setup.Android.SDL2.in.' % ', '.join(SIMD_SOURCES))
+        return '\n'.join(result) + '\n'
 
     def get_recipe_env(self, arch):
         env = super().get_recipe_env(arch)
