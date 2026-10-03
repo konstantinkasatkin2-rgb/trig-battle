@@ -80,7 +80,7 @@ pygame 2.1.0 не собирается: его C-код использует `lo
 | `orientation` | `landscape` | игра рассчитана на альбомную ориентацию |
 | `android.permissions` | пусто | игре не нужны ни сеть, ни геолокация |
 | `android.archs` | `arm64-v8a` | все современные телефоны; APK вдвое меньше и вдвое быстрее сборка. 32-битный armeabi-v7a на свежих NDK ломается на `grpmodule.c` |
-| `p4a.local_recipes` | `./p4a-recipes` | свой рецепт pygame: отключает `CYTHON_USE_PYLONG_INTERNALS`, без чего pygame 2.1.0 не собирается на Python 3.11+ (не находит `longintrepr.h`) |
+| `p4a.local_recipes` | `./p4a-recipes` | свой рецепт pygame **2.1.3** вместо штатных 2.1.0: 2.1.0 несовместим с Python 3.11 (`longintrepr.h` переехал, `PyFrameObject` стал непрозрачным), а 2.1.3 — первая версия с поддержкой 3.11 и ещё с Android-шаблоном `Setup.Android.SDL2.in` |
 | `version` / `package.name` | `0.2.0` / `trigbattle` | итоговый файл `trigbattle_0.2.0.apk` |
 | `android.accept_sdk_license` | `True` | нужно для CI |
 
