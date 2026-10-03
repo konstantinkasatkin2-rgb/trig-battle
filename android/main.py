@@ -50,6 +50,9 @@ class BTManager:
         return ''.join(random.choice(chars) for _ in range(5))
     
     def start_host(self, code, on_connected):
+        if not self._bt_available:
+            Clock.schedule_once(lambda dt: on_connected(False, "Bluetooth не поддерживается на этом устройстве"))
+            return
         self.is_host = True
         self.callbacks['connected'] = on_connected
         self.peer_name = code
@@ -87,6 +90,9 @@ class BTManager:
         self._listen_thread.start()
     
     def connect_to_host(self, code, on_connected):
+        if not self._bt_available:
+            Clock.schedule_once(lambda dt: on_connected(False, "Bluetooth не поддерживается на этом устройстве"))
+            return
         self.is_host = False
         self.callbacks['connected'] = on_connected
         self.peer_name = code
@@ -1116,12 +1122,18 @@ class TrigBattleApp(App):
 
     # ===================== BLUETOOTH P2P =====================
     def bt_start_host(self):
+        if not bt_manager.is_available():
+            self.set_msg('Bluetooth не поддерживается на этом устройстве', (0.7,0,0,1))
+            return
         code = bt_manager.generate_code()
         self.bt_wait_code.text = f'Ваш код: {code}'
         self.go('bluetooth_wait')
         bt_manager.start_host(code, self._on_bt_connected)
 
     def bt_do_join(self):
+        if not bt_manager.is_available():
+            self.set_msg('Bluetooth не поддерживается на этом устройстве', (0.7,0,0,1))
+            return
         code = self.bt_join_input.text.strip().upper()
         if len(code) != 5:
             self.set_msg('Код должен быть 5 символов!', (0.7,0,0,1))

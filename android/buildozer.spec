@@ -29,7 +29,7 @@ orientation = landscape
 fullscreen = 0
 
 # (list) Permissions
-#android.permissions = INTERNET
+android.permissions = INTERNET, BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION
 
 # (int) Target Android API, should be as high as possible.
 #android.api = 33
