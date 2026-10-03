@@ -16,3 +16,6 @@ dist/
 apk-download/
 users.db
 db_key.key
+
+# кэш компилятора в CI
+.ccache/

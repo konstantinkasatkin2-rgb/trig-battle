@@ -79,12 +79,27 @@ jobs:
       # Кэш компилятора нужен только когда рецепты действительно
       # пересобираются. На быстром пути (кэш дерева попал) ничего не
       # компилируется, и качать сотни мегабайт ради этого смысла нет.
+      # ccache применяется p4a при компиляции (в логах видно /usr/bin/ccache
+      # перед вызовом clang), но сам выбирает каталог для кэша, и он не
+      # обязательно ~/.ccache: из-за этого первый запуск сохранил пустой
+      # кэш ("Path Validation Error: Path ... does not exist"). Поэтому путь
+      # задаём явно. CCACHE_BASEDIR нужен, чтобы ключи кэша не зависели от
+      # случайно выбранного рабочего каталога.
+      - name: Настроить кэш компилятора
+        working-directory: ready_apk
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ccache"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          echo "ccache: $(ccache --version 2>&1 | head -1 || echo 'не установлен')"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"
+
       - name: Cache ccache (only when recipes are rebuilt)
         id: cache-ccache
         if: steps.cache-build.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
-          path: ~/.ccache
+          path: .ccache
           key: ccache-${{ runner.os }}-v1
           restore-keys: |
             ccache-${{ runner.os }}-
@@ -186,5 +201,5 @@ jobs:
         uses: actions/cache/save@v4
         if: always() && steps.cache-ccache.outputs.cache-primary-key != ''
         with:
-          path: ~/.ccache
+          path: .ccache
           key: ${{ steps.cache-ccache.outputs.cache-primary-key }}
