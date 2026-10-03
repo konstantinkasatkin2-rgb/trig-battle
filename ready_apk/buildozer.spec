@@ -17,9 +17,10 @@ source.include_exts = py,png,jpg,jpeg,ttf,otf,json
 version = 0.1.0
 
 # (list) Application requirements.
-# pygame собирается python-for-android из исходников и требует SDL2-модулей;
-# версии зафиксированы (так предписывает recipe pygame).
-requirements = python3,pygame,sdl2_ttf==2.0.15,sdl2_image==2.0.2,sdl2_mixer==2.0.0
+# pygame собирается python-for-android из исходников и требует SDL2-модулей.
+# Версии НЕ фиксируем: старые архивы sdl2_* (2.0.2 и т.п.) удалены с GitHub
+# и сборка падает с 404 — пусть python-for-android возьмёт свои актуальные.
+requirements = python3,pygame,sdl2_ttf,sdl2_image,sdl2_mixer
 
 # (str) Supported orientation — игра рассчитана на альбомную
 orientation = landscape
