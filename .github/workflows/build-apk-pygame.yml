@@ -38,18 +38,27 @@ jobs:
             libtool libltdl-dev pkg-config zlib1g-dev libncurses-dev \
             libffi-dev libssl-dev cmake ccache
 
-      - name: Cache buildozer / SDK / NDK
-        id: cache
+      # --- Кэш разделён намеренно ---
+      # SDK/NDK (~2 ГБ) — ключ стабильный, переживает любые изменения.
+      - name: Cache Android SDK / NDK
+        id: cache-sdk
         uses: actions/cache/restore@v4
         with:
-          path: |
-            ready_apk/.buildozer
-            ~/.buildozer
-          # Ключ НЕ зависит от buildozer.spec: иначе смена версии или
-          # requirements заставила бы заново качать SDK/NDK (~2 ГБ).
-          key: buildozer-pygame-${{ runner.os }}-p4a2024-arm64
+          path: ~/.buildozer
+          key: buildozer-sdk-${{ runner.os }}-v1
           restore-keys: |
-            buildozer-pygame-${{ runner.os }}-
+            buildozer-sdk-${{ runner.os }}-
+
+      # Дерево сборки — ключ зависит от spec и локальных рецептов, и БЕЗ
+      # restore-keys: иначе p4a увидит распакованные исходники прошлой
+      # версии и напишет "pygame is already unpacked, skipping",
+      # то есть соберёт СТАРЫЙ код вопреки смене версии рецепта.
+      - name: Cache build tree
+        id: cache-build
+        uses: actions/cache/restore@v4
+        with:
+          path: ready_apk/.buildozer
+          key: buildozer-build-${{ runner.os }}-${{ hashFiles('ready_apk/buildozer.spec', 'ready_apk/p4a-recipes/**') }}
 
       - name: Install Buildozer
         run: |
@@ -89,14 +98,18 @@ jobs:
           path: ready_apk/dist/trigbattle_*.apk
           if-no-files-found: error
 
-      # Сохраняем SDK/NDK даже при падении сборки: иначе каждый неудачный
-      # прогон заново качает ~2 ГБ. Сохраняем ровно под тем же ключом,
-      # который восстановили (если кэша не было — пустой ключ, пропускаем).
-      - name: Save buildozer / SDK / NDK cache
+      # Сохраняем оба кэша даже при падении сборки: иначе каждый неудачный
+      # прогон заново качает ~2 ГБ SDK/NDK.
+      - name: Save Android SDK / NDK cache
         uses: actions/cache/save@v4
-        if: always() && steps.cache.outputs.cache-primary-key != ''
+        if: always() && steps.cache-sdk.outputs.cache-primary-key != ''
         with:
-          path: |
-            ready_apk/.buildozer
-            ~/.buildozer
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+          path: ~/.buildozer
+          key: ${{ steps.cache-sdk.outputs.cache-primary-key }}
+
+      - name: Save build tree cache
+        uses: actions/cache/save@v4
+        if: always() && steps.cache-build.outputs.cache-primary-key != ''
+        with:
+          path: ready_apk/.buildozer
+          key: ${{ steps.cache-build.outputs.cache-primary-key }}
