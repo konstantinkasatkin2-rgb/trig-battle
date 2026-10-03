@@ -13,10 +13,8 @@ source.dir = .
 # (list) Source files to include
 source.include_exts = py,png,jpg,jpeg,ttf,otf,json
 
-# (list) ВАЖНО: эти шаблоны buildozer передаёт в p4a как --include-patterns.
-# Без них (значение по умолчанию пустое) при --ignore-setup-py python-for-android
-# НЕ копирует файлы проекта в бандл: в APK попадает Python с pygame, но без
-# main.py — приложение стартует и мгновенно закрывается на ЛЮБОМ телефоне.
+# (list) Какие файлы buildozer кладёт в приватный каталог, из которого
+# p4a ставит проект. setup.py обязан быть здесь, иначе p4a не увидит проект.
 source.include_patterns = *.py,*.pyc,*.png,*.jpg,*.jpeg,*.json,*.ttf,*.otf
 
 # (str) Application versioning
@@ -59,6 +57,13 @@ p4a.branch = v2024.01.21
 
 # Нужен SDL2 (pygame 2.x не собирается под SDL1)
 p4a.bootstrap = sdl2
+
+# (bool) КРИТИЧНО: установить проект через setup.py.
+# По умолчанию buildozer передаёт p4a флаг --ignore-setup-py, а p4a кладёт
+# файлы проекта в APK ТОЛЬКО через setup.py. С этим флагом в бандл попадает
+# Python с pygame, но БЕЗ main.py — приложение стартует и сразу закрывается.
+# Нужен файл setup.py рядом с main.py (он есть) и эта опция = True.
+p4a.setup_py = True
 
 # Локальный рецепт pygame: выключает CYTHON_USE_PYLONG_INTERNALS,
 # иначе pygame 2.1.0 не компилируется на Python 3.11+ (longintrepr.h).

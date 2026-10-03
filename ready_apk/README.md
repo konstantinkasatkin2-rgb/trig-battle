@@ -10,6 +10,7 @@ ready_apk/
 ├── main.py                 точка входа для buildozer
 ├── buildozer.spec          настройки сборки
 ├── p4a-recipes/pygame/     локальный рецепт p4a (pygame 2.1.3 вместо 2.1.0)
+├── setup.py                обязателен: без него p4a не кладёт игру в APK
 ├── tools/verify_apk.py     проверка, что игра реально попала в APK
 ├── build_apk.sh            однокомандная сборка (Linux/WSL)
 └── README.md               этот файл
@@ -111,8 +112,9 @@ buildozer --version                # версия buildozer
 
 Версия 0.2.0 была собрана, но в APK не попали файлы игры: приложение
 стартовало и мгновенно закрывалось (на любом телефоне). Причина —
-пустой `source.include_patterns`: при `--ignore-setup-py` python-for-android
-не копирует `main.py` в бандл.
+buildozer передаёт python-for-android флаг `--ignore-setup-py`, а p4a
+кладёт файлы проекта в APK **только** через `setup.py`. Лечится парой
+`setup.py` + `p4a.setup_py = True` в `buildozer.spec`.
 
 В 0.2.1 это исправлено, а в CI появилась проверка
 `tools/verify_apk.py` — сборка падает, если внутри APK нет `main.py`.

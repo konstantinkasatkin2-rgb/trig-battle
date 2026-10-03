@@ -19,7 +19,9 @@ import sys
 import tarfile
 import zipfile
 
-REQUIRED = ('main.pyc', 'trig_battle_pygame.pyc')
+# Модули игры: p4a может положить их как .py (при установке через setup.py)
+# или как .pyc — принимаем оба варианта.
+REQUIRED = ('main', 'trig_battle_pygame')
 
 
 def verify(apk):
@@ -44,7 +46,9 @@ def verify(apk):
 
     ok = True
     for need in REQUIRED:
-        hit = [m for m in names if need in m]
+        hit = [m for m in names
+               if m.endswith('/' + need + '.py')
+               or m.endswith('/' + need + '.pyc')]
         print('  %s %s%s' % ('OK  ' if hit else 'НЕТ ', need,
                              '  -> ' + hit[0] if hit else ''))
         ok = ok and bool(hit)
