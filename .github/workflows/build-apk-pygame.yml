@@ -71,6 +71,13 @@ jobs:
           python -m pip install --upgrade pygame
           cd ready_apk && python -c "import main; print('entry point ok')"
 
+      # Рецепт trigbattle_src — единственное, что кладёт код игры в APK.
+      # Проверяем его за секунду ДО девятиминутной сборки, чтобы не ждать
+      # полного прогона из-за опечатки в рецепте.
+      - name: Sanity check (рецепт кладёт игру в APK)
+        working-directory: ready_apk
+        run: python tools/test_recipe.py
+
       - name: Build APK
         working-directory: ready_apk
         run: buildozer android debug
@@ -101,7 +108,11 @@ jobs:
           set -euo pipefail
           python3 tools/verify_apk.py dist/*.apk
 
+      # upload-artifact выполняется и при провале проверки выше: нужен
+      # файл, чтобы разобрать бандл и понять, что именно не попало внутрь.
+      # Статус прогона при этом остаётся failed — красный.
       - name: Upload APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.prepare.outputs.apkname }}

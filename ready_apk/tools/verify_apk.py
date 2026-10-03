@@ -2,10 +2,11 @@
 """
 Проверка собранного APK: внутри обязательно должны быть файлы игры.
 
-Нужна потому, что при `--ignore-setup-py` и пустом `source.include_patterns`
-python-for-android молча собирает APK с Python и pygame, но БЕЗ main.py —
-приложение стартует и сразу закрывается, а причина не видна нигде.
-(Именно так вёл себя APK 0.2.0.)
+Нужна потому, что python-for-android умеет молча собрать APK с Python и
+pygame, но БЕЗ кода игры: приложение стартует и сразу закрывается, а
+причина не видна нигде — сборка зелёная. Код игры кладёт в бандл
+рецепт p4a-recipes/trigbattle_src; если он отвалится, этот скрипт
+остановит прогон. (Именно так вёл себя APK 0.2.0.)
 
 Запуск:
     python tools/verify_apk.py dist/trigbattle_0.2.1.apk
@@ -35,6 +36,8 @@ def verify(apk):
     names = tarfile.open(fileobj=io.BytesIO(raw)).getnames()
 
     print('  файлов в бандле: %d' % len(names))
+    tops = sorted({n.split('/')[1] for n in names if n.count('/') >= 1})
+    print('  верхний уровень бандла: %s' % ', '.join(tops[:12]))
     archs = sorted({n.split('/')[1] for n in z.namelist()
                     if n.startswith('lib/')})
     print('  архитектуры: %s' % ', '.join(archs))
@@ -58,7 +61,9 @@ def verify(apk):
 
     if not ok:
         sys.exit('\nОШИБКА: игра не попала в APK — приложение не запустится.\n'
-                 'Проверьте source.include_patterns в buildozer.spec.')
+                 'Проверьте рецепт p4a-recipes/trigbattle_src (он кладёт\n'
+                 'main.py и trig_battle_pygame.py в site-packages) и его\n'
+                 'наличие в requirements в buildozer.spec.')
     print('\nВсё в порядке: игра внутри APK есть.')
 
 

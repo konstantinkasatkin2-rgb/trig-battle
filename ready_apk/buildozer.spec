@@ -24,7 +24,12 @@ version = 0.2.1
 # pygame собирается python-for-android из исходников и требует SDL2-модулей.
 # Версии НЕ фиксируем: старые архивы sdl2_* (2.0.2 и т.п.) удалены с GitHub
 # и сборка падает с 404 — пусть python-for-android возьмёт свои актуальные.
-requirements = python3,pygame,sdl2_ttf,sdl2_image,sdl2_mixer
+#
+# trigbattle_src — наш локальный рецепт (p4a-recipes/trigbattle_src): он
+# кладёт main.py и trig_battle_pygame.py в site-packages. БЕЗ него APK
+# собирается «успешно», но без кода игры: приложение стартует и сразу
+# закрывается. Подробности — в p4a-recipes/trigbattle_src/__init__.py.
+requirements = python3,pygame,sdl2_ttf,sdl2_image,sdl2_mixer,trigbattle_src
 
 # (str) Supported orientation — игра рассчитана на альбомную
 orientation = landscape
