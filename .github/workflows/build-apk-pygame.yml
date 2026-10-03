@@ -49,16 +49,45 @@ jobs:
           restore-keys: |
             buildozer-sdk-${{ runner.os }}-
 
-      # Дерево сборки — ключ зависит от spec и локальных рецептов, и БЕЗ
-      # restore-keys: иначе p4a увидит распакованные исходники прошлой
-      # версии и напишет "pygame is already unpacked, skipping",
-      # то есть соберёт СТАРЫЙ код вопреки смене версии рецепта.
+      # Дерево сборки: ключ НЕ по всему buildozer.spec, а только по тому, что
+      # действительно влияет на компиляцию рецептов. Иначе смена версии или
+      # ориентации заставляла бы пересобирать SDL2 и harfbuzz заново (~9 мин)
+      # вместо переиспользования готовых объектов (~1 мин).
+      #
+      # Ключ по-прежнему БЕЗ restore-keys: иначе p4a увидит распакованные
+      # исходники прошлой версии и напишет "pygame is already unpacked,
+      # skipping", то есть соберёт СТАРЫЙ код вопреки смене рецепта.
+      - name: Compute build signature
+        id: sig
+        working-directory: ready_apk
+        run: |
+          # Всё, что меняет набор или параметры сборки рецептов. Комментарии
+          # и форматирование сюда не входят намеренно.
+          grep -E '^(requirements|p4a\.(branch|bootstrap|bootstrap_branch|extra_args)|android\.(archs|api|ndk_api|ndk|min_sdk_version|release_artifact))[[:space:]]*=' \
+            buildozer.spec | sort > /tmp/build-sig.txt
+          echo "строк в подписи: $(wc -l < /tmp/build-sig.txt)"
+          cat /tmp/build-sig.txt
+          echo "sig=$(sha256sum /tmp/build-sig.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
       - name: Cache build tree
         id: cache-build
         uses: actions/cache/restore@v4
         with:
           path: ready_apk/.buildozer
-          key: buildozer-build-${{ runner.os }}-${{ hashFiles('ready_apk/buildozer.spec', 'ready_apk/p4a-recipes/**') }}
+          key: buildozer-build-${{ runner.os }}-${{ steps.sig.outputs.sig }}-${{ hashFiles('ready_apk/p4a-recipes/**') }}
+
+      # Кэш компилятора нужен только когда рецепты действительно
+      # пересобираются. На быстром пути (кэш дерева попал) ничего не
+      # компилируется, и качать сотни мегабайт ради этого смысла нет.
+      - name: Cache ccache (only when recipes are rebuilt)
+        id: cache-ccache
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-v1
+          restore-keys: |
+            ccache-${{ runner.os }}-
 
       - name: Install Buildozer
         run: |
@@ -150,3 +179,12 @@ jobs:
         with:
           path: ready_apk/.buildozer
           key: ${{ steps.cache-build.outputs.cache-primary-key }}
+
+      # ccache сохраняем только если им пользовались (см. условие restore):
+      # на быстром пути его нет, незачем забивать кэш лишними сотнями МБ.
+      - name: Save ccache
+        uses: actions/cache/save@v4
+        if: always() && steps.cache-ccache.outputs.cache-primary-key != ''
+        with:
+          path: ~/.ccache
+          key: ${{ steps.cache-ccache.outputs.cache-primary-key }}
