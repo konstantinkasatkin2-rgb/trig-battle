@@ -21,12 +21,18 @@ from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen, ScreenManager
 from kivy.uix.textinput import TextInput
 from kivy.uix.scrollview import ScrollView
-from kivy.clock import Clock
+from kivy.uix.widget import Widget
+from kivy.uix.slider import Slider
 import threading
 import uuid
 import json
 import time
 from kivy.network.urlrequest import UrlRequest
+
+try:
+    from auth_db import auth_db
+except Exception:
+    auth_db = None
 
 # ===================== BLUETOOTH P2P LAYER =====================
 class BTManager:
@@ -42,7 +48,23 @@ class BTManager:
         self._listen_thread = None
         self._read_thread = None
         self.app_uuid = uuid.UUID("12345678-1234-5678-1234-56789abcdef0")
-    
+        self._bt_available = None
+
+    def _detect_bt(self):
+        """True, если на устройстве есть BluetoothAdapter."""
+        try:
+            from jnius import autoclass
+            adapter = autoclass(
+                'android.bluetooth.BluetoothAdapter').getDefaultAdapter()
+            return adapter is not None
+        except Exception:
+            return False
+
+    def is_available(self):
+        if self._bt_available is None:
+            self._bt_available = self._detect_bt()
+        return self._bt_available
+
     def generate_code(self):
         """Генерирует 5-символьный код: цифра/буква (0-9, A-Z кроме O,I)."""
         import random
@@ -50,7 +72,7 @@ class BTManager:
         return ''.join(random.choice(chars) for _ in range(5))
     
     def start_host(self, code, on_connected):
-        if not self._bt_available:
+        if not self.is_available():
             Clock.schedule_once(lambda dt: on_connected(False, "Bluetooth не поддерживается на этом устройстве"))
             return
         self.is_host = True
@@ -84,13 +106,13 @@ class BTManager:
                 self._start_read_loop()
                 
             except Exception as e:
-                Clock.schedule_once(lambda dt: self.app.set_msg(f'Ошибка хоста: {e}', (0.7,0,0,1)))
+                Clock.schedule_once(lambda dt, e=e: self.app.set_msg(f'Ошибка хоста: {e}', (0.7,0,0,1)))
         
         self._listen_thread = threading.Thread(target=run_server, daemon=True)
         self._listen_thread.start()
     
     def connect_to_host(self, code, on_connected):
-        if not self._bt_available:
+        if not self.is_available():
             Clock.schedule_once(lambda dt: on_connected(False, "Bluetooth не поддерживается на этом устройстве"))
             return
         self.is_host = False
@@ -121,7 +143,7 @@ class BTManager:
                 self._start_read_loop()
                 
             except Exception as e:
-                Clock.schedule_once(lambda dt: self.app.set_msg(f'Ошибка подключения: {e}', (0.7,0,0,1)))
+                Clock.schedule_once(lambda dt, e=e: self.app.set_msg(f'Ошибка подключения: {e}', (0.7,0,0,1)))
         
         threading.Thread(target=run_client, daemon=True).start()
     
@@ -143,7 +165,7 @@ class BTManager:
                     elif bytes_read == -1:
                         break
             except Exception as e:
-                Clock.schedule_once(lambda dt: self._on_disconnected(str(e)))
+                Clock.schedule_once(lambda dt, e=e: self._on_disconnected(str(e)))
         
         self._read_thread = threading.Thread(target=read_loop, daemon=True)
         self._read_thread.start()
@@ -752,32 +774,6 @@ class TrigBattleApp(App):
         scr.add_widget(lay)
         return scr
 
-    # --- профиль ---
-        scr = Screen(name='profile')
-        lay = BoxLayout(orientation='vertical', padding=40, spacing=14)
-        lay.add_widget(Label(text='Профиль',
-                             font_size='24sp', bold=True,
-                             color=(0, 0, 0.5, 1), size_hint_y=0.2))
-        lay.add_widget(Label(text=f'Текущий ник: {self.nickname}',
-                             font_size='18sp', color=(0.3, 0.3, 0.3, 1),
-                             size_hint_y=0.1))
-        self.nick_input = TextInput(text=self.nickname,
-                                    hint_text='Введите новый ник',
-                                    multiline=False, font_size='20sp',
-                                    size_hint_y=None, height='60dp',
-                                    font_name='DejaVuSans')
-        lay.add_widget(self.nick_input)
-        b = Button(text='Сохранить', size_hint_y=None, height='60dp',
-                   background_color=(0.6, 0.95, 0.6, 1),
-                   font_name='DejaVuSans')
-        b.bind(on_release=lambda *_: self.save_nickname())
-        lay.add_widget(b)
-        b = Button(text='Назад', size_hint_y=None, height='55dp')
-        b.bind(on_release=lambda *_: self.go('menu'))
-        lay.add_widget(b)
-        scr.add_widget(lay)
-        self.sm.add_widget(scr)
-
     def save_nickname(self):
         new_nick = self.nick_input.text.strip()
         if new_nick:
@@ -792,6 +788,81 @@ class TrigBattleApp(App):
         Window.clearcolor = (0.94, 0.94, 0.94, 1)
         self.sm = ScreenManager()
         self.nickname = 'Игрок'  # дефолтный ник
+        self.user_state = {'user_id': None, 'nickname': None,
+                           'email': None, 'logged_in': False}
+
+        # --- профиль (ник + вход/регистрация) ---
+        scr = Screen(name='profile')
+        lay = BoxLayout(orientation='vertical', padding=40, spacing=10)
+        lay.add_widget(Label(text='Профиль',
+                             font_size='24sp', bold=True,
+                             color=(0, 0, 0.5, 1), size_hint_y=0.12))
+        lay.add_widget(Label(text=f'Текущий ник: {self.nickname}',
+                             font_size='18sp', color=(0.3, 0.3, 0.3, 1),
+                             size_hint_y=None, height='40dp'))
+        self.nick_input = TextInput(text=self.nickname,
+                                    hint_text='Введите новый ник',
+                                    multiline=False, font_size='20sp',
+                                    size_hint_y=None, height='50dp',
+                                    font_name='DejaVuSans')
+        lay.add_widget(self.nick_input)
+        b = Button(text='Сохранить ник', size_hint_y=None, height='50dp',
+                   background_color=(0.6, 0.95, 0.6, 1),
+                   font_name='DejaVuSans')
+        b.bind(on_release=lambda *_: self.save_nickname())
+        lay.add_widget(b)
+        lay.add_widget(Label(text='Вход', font_size='18sp', bold=True,
+                             size_hint_y=None, height='36dp'))
+        self.login_email = TextInput(hint_text='Email', multiline=False,
+                                     font_size='18sp', size_hint_y=None,
+                                     height='46dp', font_name='DejaVuSans')
+        self.login_pass = TextInput(hint_text='Пароль', password=True,
+                                    multiline=False, font_size='18sp',
+                                    size_hint_y=None, height='46dp',
+                                    font_name='DejaVuSans')
+        lay.add_widget(self.login_email)
+        lay.add_widget(self.login_pass)
+        b = Button(text='Войти', size_hint_y=None, height='46dp',
+                   background_color=(0.6, 0.8, 1, 1),
+                   font_name='DejaVuSans')
+        b.bind(on_release=lambda *_: self.login_user())
+        lay.add_widget(b)
+        lay.add_widget(Label(text='Регистрация', font_size='18sp',
+                             bold=True, size_hint_y=None, height='36dp'))
+        self.reg_nick = TextInput(hint_text='Ник', multiline=False,
+                                  font_size='18sp', size_hint_y=None,
+                                  height='46dp', font_name='DejaVuSans')
+        self.reg_email = TextInput(hint_text='Email', multiline=False,
+                                   font_size='18sp', size_hint_y=None,
+                                   height='46dp', font_name='DejaVuSans')
+        self.reg_pass = TextInput(hint_text='Пароль', password=True,
+                                  multiline=False, font_size='18sp',
+                                  size_hint_y=None, height='46dp',
+                                  font_name='DejaVuSans')
+        self.reg_pass2 = TextInput(hint_text='Повтор пароля',
+                                   password=True, multiline=False,
+                                   font_size='18sp', size_hint_y=None,
+                                   height='46dp', font_name='DejaVuSans')
+        lay.add_widget(self.reg_nick)
+        lay.add_widget(self.reg_email)
+        lay.add_widget(self.reg_pass)
+        lay.add_widget(self.reg_pass2)
+        b = Button(text='Зарегистрироваться', size_hint_y=None,
+                   height='46dp', background_color=(1, 0.9, 0.6, 1),
+                   font_name='DejaVuSans')
+        b.bind(on_release=lambda *_: self.register_user())
+        lay.add_widget(b)
+        b = Button(text='Выйти из аккаунта', size_hint_y=None, height='46dp',
+                   background_color=(1, 0.6, 0.6, 1), font_name='DejaVuSans')
+        b.bind(on_release=lambda *_: self.logout_user())
+        lay.add_widget(b)
+        b = Button(text='Назад', size_hint_y=None, height='55dp')
+        b.bind(on_release=lambda *_: self.go('menu'))
+        lay.add_widget(b)
+        scroll = ScrollView()
+        scroll.add_widget(lay)
+        scr.add_widget(scroll)
+        self.sm.add_widget(scr)
 
         # --- меню ---
         self.sm.add_widget(self.make_menu_screen(
@@ -1216,6 +1287,9 @@ class TrigBattleApp(App):
         if not email or not password:
             self.set_msg('Введите email и пароль', (0.7, 0, 0, 1))
             return
+        if auth_db is None:
+            self.set_msg('База аккаунтов недоступна', (0.7, 0, 0, 1))
+            return
         result = auth_db.login_user(email, password)
         if result['success']:
             self.user_state.update({
@@ -1243,7 +1317,10 @@ class TrigBattleApp(App):
         if len(password) < 6:
             self.set_msg('Пароль минимум 6 символов', (0.7, 0, 0, 1))
             return
-        
+        if auth_db is None:
+            self.set_msg('База аккаунтов недоступна', (0.7, 0, 0, 1))
+            return
+
         result = auth_db.register_user(email, password, nickname)
         if result['success']:
             self.set_msg('Регистрация успешна! Войдите в аккаунт', (0, 0.5, 0, 1))

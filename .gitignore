@@ -7,3 +7,5 @@ build/
 dist/
 *.spec
 apk-download/
+users.db
+db_key.key
