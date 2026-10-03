@@ -21,6 +21,7 @@ matplotlib.rcParams['toolbar'] = 'None'   # убрать тулбар (крес�
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.widgets import Slider, RadioButtons, TextBox, Button
+from auth_db import auth_db
 
 STEP = 0.1
 GRID = 0.1
@@ -44,6 +45,9 @@ SQ_CELLS = [c for c in ALL_CELLS if abs(c[0]) <= 1 and abs(c[1]) <= 1]
 
 settings = {'planes': True, 'music': False, 'hints': False,
             'difficulty': 'Средний'}
+
+# User authentication state
+user_state = {'user_id': None, 'nickname': None, 'email': None, 'logged_in': False}
 
 fig = plt.figure(figsize=(16, 9))
 fig.canvas.manager.set_window_title('Тригонометрический морской бой')

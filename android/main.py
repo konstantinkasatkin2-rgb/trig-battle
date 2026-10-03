@@ -1209,6 +1209,60 @@ class TrigBattleApp(App):
         if bt_manager:
             bt_manager.send(msg)
 
+    # ===================== АУТЕНТИФИКАЦИЯ =====================
+    def login_user(self):
+        email = self.login_email.text.strip().lower()
+        password = self.login_pass.text
+        if not email or not password:
+            self.set_msg('Введите email и пароль', (0.7, 0, 0, 1))
+            return
+        result = auth_db.login_user(email, password)
+        if result['success']:
+            self.user_state.update({
+                'logged_in': True,
+                'user_id': result['user_id'],
+                'nickname': result['nickname'],
+                'email': result['email']
+            })
+            self.nickname = result['nickname']
+            self.nick_label.text = f'Ник: {self.nickname}'
+            self.set_msg(f'Добро пожаловать, {self.nickname}!', (0, 0.5, 0, 1))
+            self.go('menu')
+        else:
+            self.set_msg(result['error'], (0.7, 0, 0, 1))
+
+    def register_user(self):
+        email = self.reg_email.text.strip().lower()
+        password = self.reg_pass.text
+        password2 = self.reg_pass2.text
+        nickname = self.reg_nick.text.strip()[:12] or 'Игрок'
+        
+        if password != password2:
+            self.set_msg('Пароли не совпадают', (0.7, 0, 0, 1))
+            return
+        if len(password) < 6:
+            self.set_msg('Пароль минимум 6 символов', (0.7, 0, 0, 1))
+            return
+        
+        result = auth_db.register_user(email, password, nickname)
+        if result['success']:
+            self.set_msg('Регистрация успешна! Войдите в аккаунт', (0, 0.5, 0, 1))
+            self.go('profile')
+        else:
+            self.set_msg(result['error'], (0.7, 0, 0, 1))
+
+    def logout_user(self):
+        self.user_state.update({
+            'logged_in': False,
+            'user_id': None,
+            'nickname': None,
+            'email': None
+        })
+        self.nickname = 'Игрок'
+        self.nick_label.text = 'Ник: Игрок'
+        self.set_msg('Вы вышли из аккаунта', (0, 0.5, 0, 1))
+        self.go('menu')
+
     # ===================== ТУТОРИАЛ =====================
     TUT_STEPS = [
         {'key': 'intro', 'wait': None,
