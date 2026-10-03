@@ -77,7 +77,8 @@ jobs:
 
       # buildozer называет файл package-version-arch-debug.apk.
       # Собираем из него один файл с понятным именем: <package>_<version>.apk
-      - name: Prepare artifact (trigbattle_0.2.0.apk)
+      - name: Prepare artifact
+        id: prepare
         working-directory: ready_apk
         run: |
           set -euo pipefail
@@ -88,13 +89,22 @@ jobs:
           apks=(bin/*.apk)
           if [ ${#apks[@]} -eq 0 ]; then echo "APK не собран!"; exit 1; fi
           cp "${apks[0]}" "dist/${NAME}_${VER}.apk"
+          echo "apkname=${NAME}_${VER}" >> "$GITHUB_OUTPUT"
           echo "Итоговый файл: dist/${NAME}_${VER}.apk"
           ls -lh dist
+
+      # Проверка, что игра реально попала внутрь APK: без неё приложение
+      # стартует и мгновенно закрывается (именно так вёл себя APK 0.2.0)
+      - name: Verify game files inside APK
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          python3 tools/verify_apk.py dist/*.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: trigbattle_0.2.0
+          name: ${{ steps.prepare.outputs.apkname }}
           path: ready_apk/dist/trigbattle_*.apk
           if-no-files-found: error
 

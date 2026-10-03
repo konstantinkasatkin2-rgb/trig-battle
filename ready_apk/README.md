@@ -9,7 +9,8 @@ ready_apk/
 ├── trig_battle_pygame.py   игра ( pygame, без numpy/matplotlib )
 ├── main.py                 точка входа для buildozer
 ├── buildozer.spec          настройки сборки
-├── p4a-recipes/pygame/     локальный рецепт p4a (фикс под Python 3.11+)
+├── p4a-recipes/pygame/     локальный рецепт p4a (pygame 2.1.3 вместо 2.1.0)
+├── tools/verify_apk.py     проверка, что игра реально попала в APK
 ├── build_apk.sh            однокомандная сборка (Linux/WSL)
 └── README.md               этот файл
 ```
@@ -38,7 +39,7 @@ NDK (~2 ГБ). Первая сборка занимает 30–60 минут, п
    **Run workflow**.
 3. Дождитесь окончания (в первый раз ~40–70 минут: качаются SDK/NDK и
    собирается pygame из исходников).
-4. Скачайте артефакт **trigbattle_0.2.0** — внутри лежит готовый
+4. Скачайте артефакт **trigbattle_0.2.1** — внутри лежит готовый
    `trigbattle_0.2.0.apk`.
 5. Перекиньте APK на телефон и установите (нужно разрешить установку из
    неизвестных источников).
@@ -60,9 +61,9 @@ python3 -m pip install --user buildozer cython
 cd /mnt/d/trig-battle/ready_apk
 ./build_apk.sh
 ```
-Скрипт сам переименует результат: `ready_apk/dist/trigbattle_0.2.0.apk`
+Скрипт сам переименует результат: `ready_apk/dist/trigbattle_0.2.1.apk`
 (buildozer по умолчанию даёт `trigbattle-0.2.0-arm64-v8a_armeabi-v7a-debug.apk`).
-Установка: `adb install -r dist/trigbattle_0.2.0.apk`
+Установка: `adb install -r dist/trigbattle_0.2.1.apk`
 
 > Сборка только под ARM (`arm64-v8a`, `armeabi-v7a`) — APK получается
 > заметно меньше и собирается быстрее. Если нужен x86_эмулятор, уберите
@@ -81,7 +82,8 @@ pygame 2.1.0 не собирается: его C-код использует `lo
 | `android.permissions` | пусто | игре не нужны ни сеть, ни геолокация |
 | `android.archs` | `arm64-v8a` | все современные телефоны; APK вдвое меньше и вдвое быстрее сборка. 32-битный armeabi-v7a на свежих NDK ломается на `grpmodule.c` |
 | `p4a.local_recipes` | `./p4a-recipes` | свой рецепт pygame **2.1.3** вместо штатных 2.1.0: 2.1.0 несовместим с Python 3.11 (`longintrepr.h` переехал, `PyFrameObject` стал непрозрачным), а 2.1.3 — первая версия с поддержкой 3.11 и ещё с Android-шаблоном `Setup.Android.SDL2.in` |
-| `version` / `package.name` | `0.2.0` / `trigbattle` | итоговый файл `trigbattle_0.2.0.apk` |
+| `version` / `package.name` | `0.2.1` / `trigbattle` | итоговый файл `trigbattle_0.2.1.apk` |
+| `source.include_patterns` | `*.py,*.pyc,...` | **критично**: без этого p4a не кладёт файлы проекта в APK и приложение закрывается сразу после запуска |
 | `android.accept_sdk_license` | `True` | нужно для CI |
 
 ## Проверка до сборки
@@ -105,3 +107,19 @@ buildozer android clean            # очистить кэш сборки
 buildozer android logcat           # лог с телефона
 buildozer --version                # версия buildozer
 ```
+## Если приложение не запускается
+
+Версия 0.2.0 была собрана, но в APK не попали файлы игры: приложение
+стартовало и мгновенно закрывалось (на любом телефоне). Причина —
+пустой `source.include_patterns`: при `--ignore-setup-py` python-for-android
+не копирует `main.py` в бандл.
+
+В 0.2.1 это исправлено, а в CI появилась проверка
+`tools/verify_apk.py` — сборка падает, если внутри APK нет `main.py`.
+
+Если вдруг приложение снова не откроется, снимите лог:
+```bash
+adb logcat -s trigbattle python
+```
+`main.py` печатает туда диагностику при старте, а при ошибке — полный
+трейсбек и текст на экране ��а несколько секунд.

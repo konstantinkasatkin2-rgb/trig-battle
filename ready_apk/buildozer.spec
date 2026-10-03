@@ -13,8 +13,14 @@ source.dir = .
 # (list) Source files to include
 source.include_exts = py,png,jpg,jpeg,ttf,otf,json
 
+# (list) ВАЖНО: эти шаблоны buildozer передаёт в p4a как --include-patterns.
+# Без них (значение по умолчанию пустое) при --ignore-setup-py python-for-android
+# НЕ копирует файлы проекта в бандл: в APK попадает Python с pygame, но без
+# main.py — приложение стартует и мгновенно закрывается на ЛЮБОМ телефоне.
+source.include_patterns = *.py,*.pyc,*.png,*.jpg,*.jpeg,*.json,*.ttf,*.otf
+
 # (str) Application versioning
-version = 0.2.0
+version = 0.2.1
 
 # (list) Application requirements.
 # pygame собирается python-for-android из исходников и требует SDL2-модулей.

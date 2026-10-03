@@ -653,10 +653,13 @@ class Keypad(Widget):
 
 class TrigBattle:
     def __init__(self):
-        pygame.init()
         pygame.display.set_caption('Тригонометрический морской бой')
-        self.win = pygame.display.set_mode((DESIGN_W, DESIGN_H),
-                                          pygame.RESIZABLE)
+        self.win = self.open_display()
+        self.layout(self.win.get_width(), self.win.get_height())
+        print('[trigbattle] окно %dx%d, u=%.2f, видеодрайвер: %s'
+              % (self.W, self.H, self.u,
+                 os.environ.get('SDL_VIDEODRIVER', 'по умолчанию')),
+              flush=True)
         self.clock = pygame.time.Clock()
         self.running = True
         self.fullscreen = False
@@ -695,7 +698,6 @@ class TrigBattle:
         self.pressed_slider = None
 
         self.screens = {}
-        self.layout(DESIGN_W, DESIGN_H)
         self.build_ui()
         self.update_angles()
         self.show_screen('menu')
@@ -763,6 +765,23 @@ class TrigBattle:
         self.layout(w, h)
         self.build_ui()          # виджеты пересоздаются под новый размер
         self.update_angles()
+
+    # =========================================================
+    #  СОЗДАНИЕ ОКНА (с подстраховкой для телефонов)
+    # =========================================================
+    def open_display(self):
+        """Создать окно. Если видеодрайвер Android не даёт окно —
+        пробуем пустой драйвер: игра не запустится красиво, но не упадёт
+        молча, и в logcat будет видно причину."""
+        pygame.init()
+        try:
+            return pygame.display.set_mode((DESIGN_W, DESIGN_H),
+                                           pygame.RESIZABLE)
+        except pygame.error as exc:
+            print('[trigbattle] set_mode не удался: %s; пробуем драйвер '
+                  'dummy' % exc, flush=True)
+            os.environ['SDL_VIDEODRIVER'] = 'dummy'
+            return pygame.display.set_mode((DESIGN_W, DESIGN_H))
 
     # ---------------- таймеры (замена plt.pause) ----------------
     def after(self, ms, fn):
