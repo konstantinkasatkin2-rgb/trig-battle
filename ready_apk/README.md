@@ -14,6 +14,7 @@ ready_apk/
 │                           рецепт, который кладёт код игры в APK
 ├── setup.py                запасной путь доставки кода (установка в site-packages)
 ├── tools/verify_apk.py     проверка, что игра реально попала в APK
+├── tools/verify_elf.py     проверка линковки .so (ловит падение dlopen)
 ├── tools/test_recipe.py    проверка рецепта (секунда, без сборки APK)
 ├── build_apk.sh            однокомандная сборка (Linux/WSL)
 └── README.md               этот файл
@@ -82,6 +83,22 @@ NotImplementedError: display module not available
 `#if __SSE2__` / `#if __AVX2__`, а `pg_has_avx2()` без AVX2 возвращает 0.
 Проверка: `python tools/test_pygame_recipe.py` (тоже запускается в CI до
 сборки).
+
+Убедиться, что правка доехала до готового APK, можно и без телефона —
+`tools/verify_elf.py` разбирает секции ELF всех `.so` и ищет символы,
+которых нет нигде в бандле:
+
+```
+$ python tools/verify_elf.py bin/trigbattle_0.2.1.apk      # тот, что падал
+  ПРОБЛЕМА: символы без определения (1 .so):
+    surface.so: alphablit_alpha_sse2_argb_surf_alpha, ... blit_blend_rgb_mul_sse2
+$ python tools/verify_elf.py bin/trigbattle_0.2.2.apk      # с исправлением
+  ОК: каждый символ, нужный .so, где-то определён — dlopen не должен падать
+```
+
+Символы вида `PyErr_SetString` или `SDL_*` проблемой не считаются: они
+приходят из `libpython3.11.so` и `libSDL2.so`. Проверка запускается в CI
+после сборки, так что «молчаливо сломанный» APK больше не уйдёт дальше.
 
 ## Как узнать причину падения на устройстве
 

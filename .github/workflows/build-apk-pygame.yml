@@ -114,6 +114,16 @@ jobs:
           set -euo pipefail
           python3 tools/verify_apk.py dist/*.apk
 
+      # Проверка линковки .so. Именно так проявился баг pygame под Android:
+      # сборка зелёная, а на телефоне падает dlopen из-за символа
+      # alphablit_alpha_sse2_argb_surf_alpha. Теперь такой APK не уйдёт
+      # дальше по конвейеру.
+      - name: Verify ELF symbols inside APK
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          python3 tools/verify_elf.py dist/*.apk
+
       # upload-artifact выполняется и при провале проверки выше: нужен
       # файл, чтобы разобрать бандл и понять, что именно не попало внутрь.
       # Статус прогона при этом остаётся failed — красный.
