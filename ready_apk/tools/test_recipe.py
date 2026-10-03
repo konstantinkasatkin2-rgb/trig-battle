@@ -43,6 +43,10 @@ def load_recipe_with_stubs(tmp):
                 return local
             raise RuntimeError('локальный рецепт не найден: ' + local)
 
+        def get_build_dir(self, arch):
+            return os.path.join(self.ctx.build_dir, 'other_builds',
+                                self.name, arch)
+
     recipe_mod.Recipe = Recipe
     util_mod.ensure_dir = lambda d: os.makedirs(d, exist_ok=True)
     util_mod.info = lambda msg: None
@@ -58,6 +62,7 @@ def load_recipe_with_stubs(tmp):
         def __init__(self, recipes_dir, site):
             self.local_recipes = recipes_dir
             self.site = site
+            self.build_dir = os.path.join(site, 'build')
 
         def get_python_install_dir(self, arch):
             return os.path.join(self.site, arch)
@@ -101,7 +106,21 @@ def main():
         site = os.path.join(tmp, 'site-packages')
         r = mod.recipe          # берём ровно тот объект, который возьмёт p4a
         r.ctx = Ctx(recipes, site)
-        r.build_arch(type('Arch', (), {'arch': 'arm64-v8a'})())
+
+        # p4a вызывает методы с РАЗНЫМИ типами аргумента:
+        #     prepare_build_dir(arch.arch) -> строка
+        #     build_arch(arch)             -> объект Arch
+        arch_str = 'arm64-v8a'
+        arch_obj = type('Arch', (), {'arch': arch_str})()
+        try:
+            r.prepare_build_dir(arch_str)
+            r.build_arch(arch_obj)
+            # и наоборот тоже должно работать
+            r.prepare_build_dir(arch_obj)
+            r.build_arch(arch_str)
+            ok &= check(True, 'принимает и строку, и объект Arch', '')
+        except Exception as e:                                # noqa: BLE001
+            ok &= check(False, '', 'не пережил вызов p4a: %r' % (e,))
 
         print(' случай 1: игра в корне проекта, рецепт в p4a-recipes/')
         for name in mod.GAME_MODULES:

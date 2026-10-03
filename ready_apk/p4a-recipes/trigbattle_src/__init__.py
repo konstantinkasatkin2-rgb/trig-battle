@@ -41,6 +41,19 @@ GAME_MODULES = ('main.py', 'trig_battle_pygame.py')
 SEARCH_UP_LEVELS = 3
 
 
+def arch_name(arch):
+    """Имя архитектуры из аргумента рецепта.
+
+    python-for-android передаёт аргументы в НЕОДИНАКОВОМ виде
+    (build_recipes, v2024.01.21):
+        recipe.prepare_build_dir(arch.arch)  -> строка 'arm64-v8a'
+        recipe.build_arch(arch)              -> объект Arch
+    Поэтому принимаем оба варианта — иначе рецепт падает с
+    «'str' object has no attribute 'arch'».
+    """
+    return arch if isinstance(arch, str) else arch.arch
+
+
 class TrigbattleSrcRecipe(Recipe):
     """Копирует .py-файлы игры в site-packages целевой сборки."""
 
@@ -76,11 +89,12 @@ class TrigbattleSrcRecipe(Recipe):
     def prepare_build_dir(self, arch):
         # Базовый Recipe пытается распаковать архив (self.unpack), но у
         # этого рецепта нет ни url, ни source_dir — распаковывать нечего.
-        ensure_dir(self.get_build_dir(arch.arch))
+        ensure_dir(self.get_build_dir(arch_name(arch)))
 
     def build_arch(self, arch):
+        name = arch_name(arch)
         src = self.find_game_dir()
-        dest = self.ctx.get_python_install_dir(arch.arch)
+        dest = self.ctx.get_python_install_dir(name)
         ensure_dir(dest)
         for module in GAME_MODULES:
             shutil.copy(join(src, module), join(dest, module))
