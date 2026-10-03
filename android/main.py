@@ -269,6 +269,17 @@ class BoardWidget(Widget):
             Line(points=[c for pt in p for c in pt], close=True, width=1.2,
                  dash_length=8, dash_offset=4)
 
+            # подписи зон в туториале
+            if app.tut.get('zones') and self.side == 'L':
+                self.draw_text(0, 0.52, 'ОКЕАН', (0, 0, 0.5, 0.85), 15,
+                               bold=True)
+                self.draw_text(0, 0.40, 'только корабли', (0, 0, 0.5, 0.85),
+                               9)
+                for zx in (0.9, -0.9):
+                    for zy in (0.9, -0.9):
+                        self.draw_text(zx, zy, 'ВОЗДУХ', (0, 0.5, 0.5, 0.9),
+                                       9, bold=True)
+
             # призрак постройки
             gh = app.ghost_pts(self.side)
             if gh:
@@ -467,6 +478,8 @@ class TrigBattleApp(App):
         self.aim_sel = 1
         self.state = {'P1': None, 'P2': None}
         self.enemy_ai = {'tried': set(), 'hunt': [], 'thits': []}
+        self.tut = {'active': False, 'step': -1, 'waiting': None,
+                    'end': None, 'zones': False}
         self._built = False
 
     # ---------- вспомогательное ----------
@@ -576,6 +589,7 @@ class TrigBattleApp(App):
                 ('Средний', lambda *_: self.start_ai('Средний')),
                 ('Высокий', lambda *_: self.start_ai('Высокий')),
                 ('Локальная игра', lambda *_: self.start_local()),
+                ('Туториал', lambda *_: self.start_tutorial()),
                 ('Назад', lambda *_: self.go('menu')),
             ]))
 
@@ -647,6 +661,24 @@ class TrigBattleApp(App):
                          bold=True, color=(0, 0, 0, 1),
                          font_name='DejaVuSans')
         root.add_widget(self.msg)
+
+        # панель туториала (скрыта по умолчанию)
+        self.tut_lbl = Label(text='', color=(0.45, 0.28, 0, 1),
+                             font_size='13sp', halign='center',
+                             valign='center', font_name='DejaVuSans')
+        self.tut_lbl.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        self.tut_next_b = Button(text='Далее ▶', size_hint_x=0.16,
+                                 background_color=(1, 0.8, 0.3, 1),
+                                 font_name='DejaVuSans')
+        self.tut_skip_b = Button(text='Пропустить', size_hint_x=0.16,
+                                 font_name='DejaVuSans')
+        self.tut_next_b.bind(on_release=lambda *_: self.on_tut_next())
+        self.tut_skip_b.bind(on_release=lambda *_: self.tut_exit())
+        self.tut_bar = BoxLayout(size_hint_y=0, spacing=4)
+        self.tut_bar.add_widget(self.tut_lbl)
+        self.tut_bar.add_widget(self.tut_next_b)
+        self.tut_bar.add_widget(self.tut_skip_b)
+        root.add_widget(self.tut_bar)
 
         mid = BoxLayout(size_hint_y=0.585, spacing=6)
         self.boardL = BoardWidget(self, 'L')
@@ -784,6 +816,171 @@ class TrigBattleApp(App):
         self.set_msg('ЛОКАЛЬНАЯ ИГРА. Игрок 1 расставляет юниты на ЛЕВОМ '
                      'поле', (0, 0, 0.5, 1))
 
+    # ===================== ТУТОРИАЛ =====================
+    TUT_STEPS = [
+        {'key': 'intro', 'wait': None,
+         'text': 'ДОБРО ПОЖАЛОВАТЬ В ТУТОРИАЛ!\n'
+                 'Научимся играть за пару минут. Нажмите «Далее»'},
+        {'key': 'zones', 'wait': None, 'zones': True,
+         'text': 'Синяя окружность — ОКЕАН: там стоят ТОЛЬКО КОРАБЛИ.\n'
+                 'Уголки квадрата — ВОЗДУХ: там ТОЛЬКО САМОЛЁТЫ.\n'
+                 'Сегодня тренируем корабли.'},
+        {'key': 'mode', 'wait': None, 'hl': 'mode',
+         'text': 'Режим «Корабли» уже выбран, размер = 2.\n'
+                 'Нажмите «Далее»'},
+        {'key': 'place', 'wait': 'place',
+         'text': 'ПОСТАВЬТЕ КОРАБЛЬ: тапните по точке ВНУТРИ '
+                 'окружности.\n«Призрак» покажет, где встанет корабль.'},
+        {'key': 'select', 'wait': 'select',
+         'text': 'Теперь ВЫБЕРИТЕ корабль — тапните по нему.\n'
+                 'Он подсветится золотым.'},
+        {'key': 'rotate', 'wait': 'rotate', 'hl': 'rot',
+         'text': 'РАЗВЕРНИТЕ корабль кнопкой «Поворот».'},
+        {'key': 'start', 'wait': 'start', 'hl': 'start',
+         'text': 'Корабль готов! Нажмите «Начать бой».\n'
+                 'У противника — один такой же корабль.'},
+        {'key': 'aim', 'wait': None,
+         'text': 'ПРИЦЕЛИВАНИЕ. Попробуйте:\n'
+                 '• тянуть палец по полю («Прицел 1/2» — выбор угла)\n'
+                 '• двигать ползунки\n'
+                 '• переключать «Огонь P1/P2»\n'
+                 'Наигрались? — «Далее»'},
+        {'key': 'fire1', 'wait': 'fire', 'hl': 'fire',
+         'text': 'ТОЧНЫЙ ВЫСТРЕЛ. Выберите огонь P2 и введите:\n'
+                 'sin₁ = 0.2  и  ctg₂ = 1.5  (Enter в каждом поле)\n'
+                 '— P2 окажется в (0.3, 0.2). «Совершить ход»!'},
+        {'key': 'fire2', 'wait': 'fire', 'hl': 'fire',
+         'text': 'ПОПАДАНИЕ! Добиваем: введите ctg₂ = 2.0 (Enter)\n'
+                 '— P2 попадёт в (0.4, 0.2). «Совершить ход»!'},
+    ]
+
+    def tut_say(self, text, next_label=None):
+        self.tut_lbl.text = text
+        if next_label:
+            self.tut_next_b.text = next_label
+            self.tut_next_b.opacity = 1
+            self.tut_next_b.disabled = False
+        else:
+            self.tut_next_b.opacity = 0
+            self.tut_next_b.disabled = True
+
+    def hl_btn(self, key):
+        targets = {'mode': self.b_mode_ships, 'fire': self.b_move,
+                   'start': self.b_start, 'rot': self.b_rot}
+        for b in targets.values():
+            if not hasattr(b, '_orig_bg'):
+                b._orig_bg = list(b.background_color)
+            b.background_color = list(b._orig_bg)
+        if key in targets:
+            targets[key].background_color = (1, 0.45, 0.2, 1)
+
+    def start_tutorial(self):
+        self.tut.update(active=True, step=-1, waiting=None, end=None,
+                        zones=False)
+        self.settings['difficulty'] = 'Низкий'
+        self.game['mode'] = 'ai'
+        self.reset_game()
+        self.go('game')
+        self.tut_bar.size_hint_y = 0.10
+        self.set_msg('ТУТОРИАЛ — следуйте подсказкам', (0.45, 0.28, 0, 1))
+        self.tut_next()
+
+    def tut_next(self):
+        t = self.tut
+        t['step'] += 1
+        if t['step'] >= len(self.TUT_STEPS):
+            return
+        st = self.TUT_STEPS[t['step']]
+        t['waiting'] = st.get('wait')
+        self.tut_say(st['text'], 'Далее ▶' if st.get('wait') is None
+                     else None)
+        t['zones'] = bool(st.get('zones'))
+        self.hl_btn(st.get('hl'))
+        if st['key'] == 'mode':
+            self.set_mode('ships')
+            self.set_size(2)
+        self.redraw_all()
+
+    def on_tut_next(self):
+        t = self.tut
+        if t.get('end'):
+            if t['end'] == 'lose':
+                t['end'] = None
+                self.start_tutorial()
+            else:
+                self.tut_exit()
+            return
+        if t['waiting'] is None:
+            self.tut_next()
+
+    def tut_exit(self):
+        self.tut.update(active=False, waiting=None, end=None, zones=False)
+        self.tut_bar.size_hint_y = 0
+        self.hl_btn(None)
+        self.go('menu')
+
+    def tutorial_enemy_fire(self):
+        """Скриптованный враг: бьёт по первой неподбитой точке игрока."""
+        for un in self.FL['units']:
+            for p in un['pts']:
+                if p not in un['hits']:
+                    fire_at(self.FL, p[0], p[1])
+                    return p
+        return None
+
+    def tutorial_fire(self):
+        """Ход игрока в туториале (скриптованный бой)."""
+        g = self.game
+        P = self.state['P1'] if self.shot_sel == 'P1' else self.state['P2']
+        if P is None:
+            self.set_msg('Точка не определена — поверните углы')
+            return
+        result = fire_at(self.FR, P[0], P[1])
+        g['my_moves'] += 1
+        self.update_panels()
+        self.redraw_all()
+        if all_sunk(self.FR['units']):
+            g['phase'] = 'over'
+            self.redraw_all()
+            self.tut_end(True)
+            return
+        if result == 'miss':
+            self.set_msg('МИМО! Противник отвечает...', (0.7, 0, 0, 1))
+            hp = self.tutorial_enemy_fire()
+            self.update_panels()
+            self.redraw_all()
+            if all_sunk(self.FL['units']):
+                g['phase'] = 'over'
+                self.redraw_all()
+                self.tut_end(False)
+                return
+            self.set_msg(f'Противник попал в ({hp[0]:.1f}, {hp[1]:.1f})! '
+                         f'Снова ваш ход.', (0.7, 0, 0, 1))
+            self.tut_say('МИМО — враг попал по вашему кораблю!\n'
+                         'Введите ТОЧНО: огонь P2, sin₁ = 0.2, '
+                         'ctg₂ = 1.5 и «Совершить ход».')
+        else:
+            self.set_msg('ПОПАДАНИЕ!' if result == 'hit' else 'ПОТОПЛЕН!',
+                         (0, 0.5, 0, 1))
+            if self.tut['waiting'] == 'fire':
+                self.tut_next()
+
+    def tut_end(self, win):
+        t = self.tut
+        t['waiting'] = None
+        t['step'] = len(self.TUT_STEPS)
+        self.hl_btn(None)
+        if win:
+            t['end'] = 'win'
+            self.tut_say('🎉 ПОБЕДА! Вражеский корабль потоплен.\n'
+                         'ТУТОРИАЛ ПРОЙДЕН! Нажмите «Завершить».',
+                         next_label='Завершить')
+        else:
+            t['end'] = 'lose'
+            self.tut_say('😢 ПОРАЖЕНИЕ... Но это была тренировка!\n'
+                         '«Заново» — ещё раз, «Завершить» — выйти.',
+                         next_label='Заново')
+
     def reset_game(self):
         self.FL = {'units': [], 'misses': [], 'hints': set()}
         self.FR = {'units': [], 'misses': [], 'hints': set()}
@@ -912,6 +1109,8 @@ class TrigBattleApp(App):
             un = self.unit_at(fld, dx, dy)
             if un is not None:
                 self.unit_state['selected'] = un
+                if self.tut['active'] and self.tut['waiting'] == 'select':
+                    self.tut_next()
             else:
                 self.unit_state['selected'] = None
                 ut = self.utype()
@@ -923,6 +1122,9 @@ class TrigBattleApp(App):
                         {'type': ut, 'pts': pts,
                          'dir': self.unit_state['dir_idx'], 'size': size,
                          'hits': set()})
+                    if self.tut['active'] and \
+                            self.tut['waiting'] == 'place' and size == 2:
+                        self.tut_next()
             self.update_panels()
             self.redraw_all()
         elif phase == 'move':
@@ -950,6 +1152,8 @@ class TrigBattleApp(App):
                 un['pts'] = new_pts
                 un['dir'] = nd
         self.redraw_all()
+        if self.tut['active'] and self.tut['waiting'] == 'rotate':
+            self.tut_next()
 
     def delete_selected(self):
         un = self.unit_state['selected']
@@ -965,6 +1169,23 @@ class TrigBattleApp(App):
     # ---------- бой ----------
     def advance(self):
         g = self.game
+        # туториал: скриптованный противник — один 2-точечный корабль
+        if self.tut['active'] and g['phase'] == 'place1':
+            if not self.FL['units']:
+                self.set_msg('Сначала поставьте корабль!', (0.7, 0, 0, 1))
+                return
+            self.FR['units'].append(
+                {'type': 'ship', 'pts': [(0.3, 0.2), (0.4, 0.2)],
+                 'dir': 0, 'size': 2, 'hits': set()})
+            g['phase'] = 'battle'
+            g['turn'] = 'player1'
+            self.b_start.text = 'Бой идёт'
+            self.update_panels()
+            self.update_aim()
+            self.redraw_all()
+            if self.tut['waiting'] == 'start':
+                self.tut_next()
+            return
         if g['phase'] == 'place1':
             if not self.FL['units']:
                 self.set_msg('Игрок 1: постройте хотя бы один юнит!',
@@ -1001,6 +1222,10 @@ class TrigBattleApp(App):
 
     def make_move(self):
         g = self.game
+        if self.tut['active']:
+            if g['phase'] == 'battle':
+                self.tutorial_fire()
+            return
         if g['phase'] != 'battle':
             self.set_msg('Сначала завершите расстановку юнитов!')
             return

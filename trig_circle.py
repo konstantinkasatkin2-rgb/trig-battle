@@ -438,6 +438,9 @@ def select(un):
     if un is not None:
         un['line'].set_color('gold')
     fig.canvas.draw_idle()
+    if un is not None and tutorial['active'] and \
+            tutorial['waiting'] == 'select':
+        tut_next()
 
 
 def deselect():
@@ -459,6 +462,9 @@ def place_unit(fld, pts, dir_idx, size, utype, visible=True):
     apply_visibility()
     update_panels()
     fig.canvas.draw_idle()
+    if tutorial['active'] and tutorial['waiting'] == 'place' and \
+            fld is FL and size == 2:
+        tut_next()
 
 
 def remove_unit(un):
@@ -488,6 +494,8 @@ def rotate(step):
                                 [p[1] for p in new_pts])
     update_panels()
     fig.canvas.draw_idle()
+    if tutorial['active'] and tutorial['waiting'] == 'rotate':
+        tut_next()
 
 
 def cur_type():
@@ -672,6 +680,10 @@ def enemy_turn():
 
 # ===================== ХОД ИГРЫ =====================
 def make_move(_=None):
+    if tutorial['active']:
+        if game['phase'] == 'battle':
+            tutorial_fire()
+        return
     if game['phase'] != 'battle':
         set_msg('Сначала завершите расстановку юнитов!')
         return
@@ -773,6 +785,22 @@ def reveal_hint(fld):
 
 def advance(_=None):
     """Кнопка 'Начать бой' / 'Готово'."""
+    # туториал: скриптованный противник — один 2-точечный корабль
+    if tutorial['active'] and game['phase'] == 'place1':
+        if not FL['units']:
+            set_msg('Сначала поставьте корабль!', 'darkred')
+            return
+        place_unit(FR, [(0.3, 0.2), (0.4, 0.2)], 0, 2, 'ship',
+                   visible=False)
+        game['phase'] = 'battle'
+        game['turn'] = 'player1'
+        btn_start.label.set_text('Бой идёт')
+        apply_visibility()
+        update_panels()
+        update_all()
+        if tutorial['waiting'] == 'start':
+            tut_next()
+        return
     if game['phase'] == 'place1':
         if not FL['units']:
             set_msg('Игрок 1: постройте хотя бы один юнит!', 'darkred')
@@ -1188,6 +1216,8 @@ ui_button('difficulty', 0.21, 0.36, 0.18, 0.08, 'Высокий',
           lambda: choose_diff('Высокий'), color='mistyrose')
 ui_button('difficulty', 0.61, 0.42, 0.22, 0.22, 'Локальная\nигра',
           lambda: start_local(), color='lavender', fontsize=16)
+ui_button('difficulty', 0.61, 0.28, 0.22, 0.11, 'Туториал',
+          lambda: start_tutorial(), color='lightcyan', fontsize=15)
 ui_button('difficulty', 0.38, 0.16, 0.24, 0.08, 'Назад',
           lambda: show_screen('menu'), color='lightgray')
 
@@ -1241,6 +1271,232 @@ ui_button('feedback', 0.38, 0.25, 0.24, 0.08, 'Назад',
           lambda: show_screen('menu'), color='lightgray')
 
 btn_menu.on_clicked(lambda _: show_screen('menu'))
+
+# ===================== ТУТОРИАЛ =====================
+tutorial = {'active': False, 'step': -1, 'waiting': None, 'end': None}
+
+tut_banner = fig.text(0.5, 0.262, '', ha='center', va='center', fontsize=11,
+                      zorder=25,
+                      bbox=dict(boxstyle='round', fc='lightyellow',
+                                ec='darkorange', lw=2, alpha=0.98))
+tut_next_ax = fig.add_axes([0.795, 0.235, 0.09, 0.032])
+tut_next_btn = Button(tut_next_ax, 'Далее ▶',
+                      color='lightgoldenrodyellow', hovercolor='gold')
+tut_skip_ax = fig.add_axes([0.893, 0.235, 0.10, 0.032])
+tut_skip_btn = Button(tut_skip_ax, 'Пропустить', color='lightgray',
+                      hovercolor='silver')
+tut_banner.set_visible(False)
+tut_next_ax.set_visible(False)
+tut_skip_ax.set_visible(False)
+game_axes.extend([tut_next_ax, tut_skip_ax])
+game_texts.append(tut_banner)
+
+tut_hl = mpatches.Rectangle((0, 0), 0.01, 0.01, transform=fig.transFigure,
+                            fill=False, edgecolor='red', linewidth=3,
+                            zorder=26, visible=False)
+fig.add_artist(tut_hl)
+
+zone_texts = [
+    axL.text(0, 0.52, 'ОКЕАН', ha='center', va='center', fontsize=15,
+             fontweight='bold', color='navy', alpha=0.85, zorder=10,
+             visible=False),
+    axL.text(0, 0.38, 'только корабли', ha='center', va='center',
+             fontsize=10, color='navy', alpha=0.85, zorder=10,
+             visible=False),
+] + [
+    axL.text(zx, zy, 'ВОЗДУХ', ha='center', va='center', fontsize=9,
+             fontweight='bold', color='teal', alpha=0.9, zorder=10,
+             visible=False)
+    for zx in (0.9, -0.9) for zy in (0.9, -0.9)
+]
+
+HL_RECTS = {
+    'mode': [0.005, 0.80, 0.10, 0.16],
+    'boardL': list(axL.get_position().bounds),
+    'start': [0.795, 0.02, 0.13, 0.055],
+    'fire': [0.795, 0.08, 0.13, 0.055],
+}
+
+TUT_STEPS = [
+    {'key': 'intro', 'wait': None,
+     'text': 'ДОБРО ПОЖАЛОВАТЬ В ТУТОРИАЛ!\n'
+             'Научимся играть за пару минут.\nНажмите «Далее»'},
+    {'key': 'zones', 'wait': None, 'zones': True,
+     'text': 'Синяя окружность — это ОКЕАН: в нём могут быть '
+             'ТОЛЬКО КОРАБЛИ.\nУголки чёрного квадрата — ВОЗДУХ: '
+             'там ТОЛЬКО САМОЛЁТЫ.\nСегодня тренируемся с кораблями.'},
+    {'key': 'mode', 'wait': None, 'hl': 'mode',
+     'text': 'Слева вверху уже выбран режим «Корабли»,\n'
+             'размер корабля = 2. Нажмите «Далее»'},
+    {'key': 'place', 'wait': 'place', 'hl': 'boardL',
+     'text': 'ПОСТАВЬТЕ КОРАБЛЬ: кликните ЛКМ по точке ВНУТРИ '
+             'окружности.\nПолупрозрачный «призрак» показывает, '
+             'где встанет корабль.'},
+    {'key': 'select', 'wait': 'select', 'hl': 'boardL',
+     'text': 'Отлично! Теперь ВЫБЕРИТЕ корабль — кликните по нему.\n'
+             'Он подсветится золотым.'},
+    {'key': 'rotate', 'wait': 'rotate',
+     'text': 'Теперь РАЗВЕРНИТЕ корабль: крутите колесо мыши\n'
+             'над полем или нажмите клавишу R.'},
+    {'key': 'start', 'wait': 'start', 'hl': 'start',
+     'text': 'Корабль готов! Нажмите «Начать бой».\n'
+             'У противника — один такой же 2-точечный корабль.'},
+    {'key': 'aim', 'wait': None,
+     'text': 'ПРИЦЕЛИВАНИЕ. Попробуйте:\n'
+             '• тянуть мышь по полю (ЛКМ — угол 1, ПКМ — угол 2)\n'
+             '• двигать ползунки «Угол 1/2»\n'
+             '• переключать «Огонь P₁/P₂»\n'
+             'Когда наиграетесь — «Далее»'},
+    {'key': 'fire1', 'wait': 'fire', 'hl': 'fire',
+     'text': 'ТОЧНЫЙ ВЫСТРЕЛ. Выберите огонь P₂ и введите:\n'
+             'sin₁ = 0.2  и  ctg₂ = 1.5  (Enter в каждом поле)\n'
+             '— P₂ окажется точно в (0.3, 0.2). «Совершить ход»!'},
+    {'key': 'fire2', 'wait': 'fire', 'hl': 'fire',
+     'text': 'ПОПАДАНИЕ! Теперь добьём: введите ctg₂ = 2.0 (Enter)\n'
+             '— P₂ попадёт в (0.4, 0.2). «Совершить ход»!'},
+]
+
+
+def tut_say(text, next_label=None):
+    tut_banner.set_text(text)
+    if next_label:
+        tut_next_btn.label.set_text(next_label)
+        tut_next_ax.set_visible(True)
+    else:
+        tut_next_ax.set_visible(False)
+    fig.canvas.draw_idle()
+
+
+def tut_highlight(key):
+    if key and key in HL_RECTS:
+        tut_hl.set_bounds(*HL_RECTS[key])
+        tut_hl.set_visible(True)
+    else:
+        tut_hl.set_visible(False)
+
+
+def tut_zones(show):
+    for t in zone_texts:
+        t.set_visible(show)
+
+
+def tut_next():
+    tutorial['step'] += 1
+    if tutorial['step'] >= len(TUT_STEPS):
+        return
+    st = TUT_STEPS[tutorial['step']]
+    tutorial['waiting'] = st.get('wait')
+    tut_say(st['text'], 'Далее ▶' if st.get('wait') is None else None)
+    tut_highlight(st.get('hl'))
+    tut_zones(bool(st.get('zones')))
+    if st['key'] == 'mode':
+        mode_radio.set_active(1)   # режим "Корабли"
+        unit_state['size'] = 2
+        update_panels()
+
+
+def on_tut_next(_=None):
+    if tutorial.get('end'):
+        if tutorial['end'] == 'lose':
+            tutorial['end'] = None
+            start_tutorial()
+        else:
+            tut_exit()
+        return
+    if tutorial['waiting'] is None:
+        tut_next()
+
+
+def tut_exit():
+    tutorial.update(active=False, waiting=None, end=None)
+    tut_banner.set_visible(False)
+    tut_next_ax.set_visible(False)
+    tut_skip_ax.set_visible(False)
+    tut_highlight(None)
+    tut_zones(False)
+    show_screen('menu')
+
+
+def start_tutorial():
+    tutorial.update(active=True, step=-1, waiting=None, end=None)
+    game['mode'] = 'ai'
+    settings['difficulty'] = 'Низкий'
+    reset_game()
+    show_screen('game')
+    tut_skip_ax.set_visible(True)
+    set_msg('ТУТОРИАЛ — следуйте подсказкам', 'darkorange')
+    tut_next()
+
+
+def tutorial_enemy_fire():
+    """Скриптованный враг: бьёт по первой неподбитой точке игрока."""
+    for un in FL['units']:
+        for p in un['pts']:
+            if p not in un['hits']:
+                fire_at(FL, p[0], p[1])
+                return p
+    return None
+
+
+def tutorial_fire():
+    """Ход игрока в туториале (скриптованный бой)."""
+    P = state['P1'] if shot_sel['p'] == 'P₁' else state['P2']
+    if P is None:
+        set_msg('Точка не определена — поверните углы')
+        return
+    result = fire_at(FR, P[0], P[1])
+    game['my_moves'] += 1
+    refresh_field(FR)
+    update_panels()
+    if all_sunk(FR['units']):
+        game['phase'] = 'over'
+        apply_visibility()
+        tut_end(True)
+        return
+    if result == 'miss':
+        set_msg('МИМО! Противник стреляет в ответ...', 'darkred')
+        fig.canvas.draw_idle()
+        plt.pause(0.6)
+        hp = tutorial_enemy_fire()
+        refresh_field(FL)
+        update_panels()
+        if all_sunk(FL['units']):
+            game['phase'] = 'over'
+            apply_visibility()
+            tut_end(False)
+            return
+        set_msg(f'Противник попал в ({hp[0]:.1f}, {hp[1]:.1f})! '
+                f'Ваша очередь — следуйте подсказке.', 'darkred')
+        tut_say('МИМО — враг попал по вашему кораблю!\n'
+                'Введите ТОЧНО: огонь P₂, sin₁ = 0.2, ctg₂ = 1.5\n'
+                '(Enter в каждом поле) и «Совершить ход».')
+    else:
+        set_msg('ПОПАДАНИЕ!' if result == 'hit' else 'ПОТОПЛЕН!',
+                'darkgreen')
+        if tutorial['waiting'] == 'fire':
+            tut_next()
+
+
+def tut_end(win):
+    tutorial['waiting'] = None
+    tutorial['step'] = len(TUT_STEPS)
+    if win:
+        tutorial['end'] = 'win'
+        set_msg('ПОБЕДА в туториале!', 'darkgreen')
+        tut_say('🎉 ПОБЕДА! Вражеский корабль потоплен.\n'
+                'ТУТОРИАЛ ПРОЙДЕН! Нажмите «Завершить».',
+                next_label='Завершить')
+    else:
+        tutorial['end'] = 'lose'
+        set_msg('Поражение в туториале.', 'darkred')
+        tut_say('😢 ПОРАЖЕНИЕ... Но это была тренировка!\n'
+                '«Заново» — пройти ещё раз, «Завершить» — выйти.',
+                next_label='Заново')
+    tut_highlight(None)
+
+
+tut_next_btn.on_clicked(on_tut_next)
+tut_skip_btn.on_clicked(lambda _: tut_exit())
 
 # ===================== СОБЫТИЯ =====================
 dragging = {'btn': None}
