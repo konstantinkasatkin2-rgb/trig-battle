@@ -4,6 +4,16 @@
 (версия на pygame) в `.apk`. Папка самодостаточная: `buildozer.spec` указывает
 на `source.dir = .`, то есть копируется только эта папка.
 
+**Рабочая версия — `trigbattle_0.2.2.apk` (arm64-v8a, 16,1 МБ).** Проверена на
+устройстве: игра запускается. Готовый файл лежит в `bin/`, установка:
+`adb install -r bin/trigbattle_0.2.2.apk`.
+
+История «не открывается / вылетает» заняла пять сборок, и почти каждая
+ложилась в ловушку «сборка зелёная, а телефон мёртв». Обе ловушки и их
+проверки описаны ниже — не пропускайте шаги `tools/test_*.py` и
+`tools/verify_*.py`, иначе те же грабли вернутся.
+
+
 ```
 ready_apk/
 ├── trig_battle_pygame.py   игра ( pygame, без numpy/matplotlib )
@@ -16,6 +26,7 @@ ready_apk/
 ├── tools/verify_apk.py     проверка, что игра реально попала в APK
 ├── tools/verify_elf.py     проверка линковки .so (ловит падение dlopen)
 ├── tools/test_recipe.py    проверка рецепта (секунда, без сборки APK)
+├── tools/test_pygame_recipe.py  проверка правки рецепта pygame (simd_blitters)
 ├── build_apk.sh            однокомандная сборка (Linux/WSL)
 └── README.md               этот файл
 ```
@@ -218,6 +229,24 @@ buildozer передаёт python-for-android флаг `--ignore-setup-py`, а p
 
 В 0.2.1 это исправлено, а в CI появилась проверка
 `tools/verify_apk.py` — сборка падает, если внутри APK нет `main.py`.
+
+### 0.2.1 упала при запуске: `display module not available`
+
+Дальше код игры в APK уже был, но при старте:
+
+```
+NotImplementedError: display module not available
+(ImportError: dlopen failed: cannot locate symbol
+ "alphablit_alpha_sse2_argb_surf_alpha" referenced by ".../pygame/surface.so")
+```
+
+Это баг сборки самого pygame под Android/arm64 (см. раздел про `simd_blitters`
+выше), исправлен в рецепте и закрыт двумя проверками:
+`tools/test_pygame_recipe.py` (до сборки) и `tools/verify_elf.py` (после).
+
+Почему сообщение об ошибке не помогало: его показывали средствами pygame, а
+если SDL не смог открыть окно, показать было нечем. Теперь `main.py` пишет
+причину ещё и в файл-журнал, и в logcat — см. раздел ниже.
 
 Если вдруг приложение снова не откроется, снимите лог:
 ```bash
