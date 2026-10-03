@@ -19,9 +19,167 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen, ScreenManager
-from kivy.uix.slider import Slider
 from kivy.uix.textinput import TextInput
-from kivy.uix.widget import Widget
+from kivy.uix.scrollview import ScrollView
+from kivy.clock import Clock
+import threading
+import uuid
+import json
+import time
+from kivy.network.urlrequest import UrlRequest
+
+# ===================== BLUETOOTH P2P LAYER =====================
+class BTManager:
+    """Bluetooth P2P менеджер для Android (host/client)."""
+    def __init__(self, app):
+        self.app = app
+        self.socket = None
+        self.server_socket = None
+        self.connected = False
+        self.is_host = False
+        self.peer_name = ""
+        self.callbacks = {'connected': None, 'data': None, 'disconnected': None}
+        self._listen_thread = None
+        self._read_thread = None
+        self.app_uuid = uuid.UUID("12345678-1234-5678-1234-56789abcdef0")
+    
+    def generate_code(self):
+        """Генерирует 5-символьный код: цифра/буква (0-9, A-Z кроме O,I)."""
+        import random
+        chars = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        return ''.join(random.choice(chars) for _ in range(5))
+    
+    def start_host(self, code, on_connected):
+        self.is_host = True
+        self.callbacks['connected'] = on_connected
+        self.peer_name = code
+        
+        def run_server():
+            try:
+                from jnius import autoclass
+                BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
+                BluetoothServerSocket = autoclass('android.bluetooth.BluetoothServerSocket')
+                BluetoothSocket = autoclass('android.bluetooth.BluetoothSocket')
+                UUID = autoclass('java.util.UUID')
+                
+                adapter = BluetoothAdapter.getDefaultAdapter()
+                if not adapter or not adapter.isEnabled():
+                    Clock.schedule_once(lambda dt: self.app.set_msg('Bluetooth выключен!', (0.7,0,0,1)))
+                    return
+                
+                uuid_obj = UUID.fromString(str(self.app_uuid))
+                self.server_socket = adapter.listenUsingRfcommWithServiceRecord(
+                    "TrigBattle", uuid_obj)
+                
+                Clock.schedule_once(lambda dt: self.app.show_host_code(self.peer_name))
+                
+                self.socket = self.server_socket.accept()
+                self.connected = True
+                self.server_socket.close()
+                
+                Clock.schedule_once(lambda dt: self._on_connected())
+                self._start_read_loop()
+                
+            except Exception as e:
+                Clock.schedule_once(lambda dt: self.app.set_msg(f'Ошибка хоста: {e}', (0.7,0,0,1)))
+        
+        self._listen_thread = threading.Thread(target=run_server, daemon=True)
+        self._listen_thread.start()
+    
+    def connect_to_host(self, code, on_connected):
+        self.is_host = False
+        self.callbacks['connected'] = on_connected
+        self.peer_name = code
+        
+        def run_client():
+            try:
+                from jnius import autoclass
+                BluetoothAdapter = autoclass('android.bluetooth.BluetoothAdapter')
+                BluetoothSocket = autoclass('android.bluetooth.BluetoothSocket')
+                UUID = autoclass('java.util.UUID')
+                
+                adapter = BluetoothAdapter.getDefaultAdapter()
+                if not adapter or not adapter.isEnabled():
+                    Clock.schedule_once(lambda dt: self.app.set_msg('Bluetooth выключен!', (0.7,0,0,1)))
+                    return
+                
+                mac = code.replace('-', ':').upper()
+                device = adapter.getRemoteDevice(mac)
+                
+                uuid_obj = UUID.fromString(str(self.app_uuid))
+                self.socket = device.createRfcommSocketToServiceRecord(uuid_obj)
+                self.socket.connect()
+                self.connected = True
+                
+                Clock.schedule_once(lambda dt: self._on_connected())
+                self._start_read_loop()
+                
+            except Exception as e:
+                Clock.schedule_once(lambda dt: self.app.set_msg(f'Ошибка подключения: {e}', (0.7,0,0,1)))
+        
+        threading.Thread(target=run_client, daemon=True).start()
+    
+    def _on_connected(self):
+        self.connected = True
+        if self.callbacks['connected']:
+            self.callbacks['connected']()
+    
+    def _start_read_loop(self):
+        def read_loop():
+            try:
+                input_stream = self.socket.getInputStream()
+                buffer = bytearray(1024)
+                while self.connected:
+                    bytes_read = input_stream.read(buffer)
+                    if bytes_read > 0:
+                        data = bytes(buffer[:bytes_read]).decode('utf-8')
+                        Clock.schedule_once(lambda dt: self._handle_data(data))
+                    elif bytes_read == -1:
+                        break
+            except Exception as e:
+                Clock.schedule_once(lambda dt: self._on_disconnected(str(e)))
+        
+        self._read_thread = threading.Thread(target=read_loop, daemon=True)
+        self._read_thread.start()
+    
+    def _handle_data(self, data):
+        try:
+            msg = json.loads(data)
+            if self.callbacks['data']:
+                self.callbacks['data'](msg)
+        except:
+            pass
+    
+    def send(self, msg_dict):
+        if not self.connected or not self.socket:
+            return False
+        try:
+            data = json.dumps(msg_dict).encode('utf-8')
+            output_stream = self.socket.getOutputStream()
+            output_stream.write(data)
+            output_stream.flush()
+            return True
+        except:
+            self._on_disconnected("send error")
+            return False
+    
+    def _on_disconnected(self, reason=""):
+        self.connected = False
+        if self.callbacks['disconnected']:
+            self.callbacks['disconnected'](reason)
+    
+    def disconnect(self):
+        self.connected = False
+        try:
+            if self.socket:
+                self.socket.close()
+            if self.server_socket:
+                self.server_socket.close()
+        except:
+            pass
+
+# Глобальный менеджер
+bt_manager = None
 
 # ===================== КОНСТАНТЫ =====================
 GRID = 0.1
@@ -503,6 +661,12 @@ class TrigBattleApp(App):
             return False
         if g['mode'] == 'ai':
             return fld is self.FL
+        if g['mode'] == 'bluetooth':
+            # В блютуз-режиме: свои юниты видимы, чужие — только подбитые/потопленные
+            if fld is self.FL:
+                return True
+            else:
+                return is_sunk(un) or len(un['hits']) > 0
         if g['phase'] == 'place1':
             return fld is self.FL
         if g['phase'] == 'place2':
@@ -559,8 +723,21 @@ class TrigBattleApp(App):
     def make_menu_screen(self, name, title, items):
         scr = Screen(name=name)
         lay = BoxLayout(orientation='vertical', padding=40, spacing=12)
-        lay.add_widget(Label(text=title, font_size='28sp', bold=True,
-                             color=(0, 0, 0.5, 1), size_hint_y=0.3))
+        # профиль в левом верхнем углу
+        top_bar = BoxLayout(size_hint_y=0.12, spacing=8)
+        self.profile_btn = Button(text='👤', size_hint_x=0.12,
+                                  font_size='24sp', font_name='DejaVuSans')
+        self.profile_btn.bind(on_release=lambda *_: self.go('profile'))
+        top_bar.add_widget(self.profile_btn)
+        self.nick_label = Label(text=f'Ник: {self.nickname}',
+                                font_size='16sp', color=(0, 0, 0.5, 1),
+                                halign='left', valign='center',
+                                font_name='DejaVuSans', size_hint_x=0.88)
+        self.nick_label.bind(size=lambda i, v: setattr(i, 'text_size', v))
+        top_bar.add_widget(self.nick_label)
+        lay.add_widget(top_bar)
+        lay.add_widget(Label(text=title, font_size='24sp', bold=True,
+                             color=(0, 0, 0.5, 1), size_hint_y=0.25))
         for text, cb in items:
             b = Button(text=text, font_size='18sp', size_hint_y=None,
                        height='60dp')
@@ -569,14 +746,52 @@ class TrigBattleApp(App):
         scr.add_widget(lay)
         return scr
 
+    # --- профиль ---
+        scr = Screen(name='profile')
+        lay = BoxLayout(orientation='vertical', padding=40, spacing=14)
+        lay.add_widget(Label(text='Профиль',
+                             font_size='24sp', bold=True,
+                             color=(0, 0, 0.5, 1), size_hint_y=0.2))
+        lay.add_widget(Label(text=f'Текущий ник: {self.nickname}',
+                             font_size='18sp', color=(0.3, 0.3, 0.3, 1),
+                             size_hint_y=0.1))
+        self.nick_input = TextInput(text=self.nickname,
+                                    hint_text='Введите новый ник',
+                                    multiline=False, font_size='20sp',
+                                    size_hint_y=None, height='60dp',
+                                    font_name='DejaVuSans')
+        lay.add_widget(self.nick_input)
+        b = Button(text='Сохранить', size_hint_y=None, height='60dp',
+                   background_color=(0.6, 0.95, 0.6, 1),
+                   font_name='DejaVuSans')
+        b.bind(on_release=lambda *_: self.save_nickname())
+        lay.add_widget(b)
+        b = Button(text='Назад', size_hint_y=None, height='55dp')
+        b.bind(on_release=lambda *_: self.go('menu'))
+        lay.add_widget(b)
+        scr.add_widget(lay)
+        self.sm.add_widget(scr)
+
+    def save_nickname(self):
+        new_nick = self.nick_input.text.strip()
+        if new_nick:
+            self.nickname = new_nick[:12]  # макс 12 символов
+            self.nick_label.text = f'Ник: {self.nickname}'
+            self.set_msg(f'Ник изменён на "{self.nickname}"', (0, 0.5, 0, 1))
+        self.go('menu')
+
     def build(self):
+        global bt_manager
+        bt_manager = BTManager(self)
         Window.clearcolor = (0.94, 0.94, 0.94, 1)
         self.sm = ScreenManager()
+        self.nickname = 'Игрок'  # дефолтный ник
 
         # --- меню ---
         self.sm.add_widget(self.make_menu_screen(
             'menu', 'Тригонометрический\nморской бой', [
                 ('Начать игру', lambda *_: self.go('difficulty')),
+                ('Блютуз-битва', lambda *_: self.go('bluetooth')),
                 ('Правила', lambda *_: self.go('rules')),
                 ('Настройки', lambda *_: self.go('settings')),
                 ('Обратная связь', lambda *_: self.go('feedback')),
@@ -635,6 +850,89 @@ class TrigBattleApp(App):
             'feedback', 'Обратная связь:\n\n'
             'konstantinkasatkin2@gmail.com',
             [('Назад', lambda *_: self.go('menu'))]))
+
+        # --- блютуз: хост ---
+        scr = Screen(name='bluetooth_host')
+        lay = BoxLayout(orientation='vertical', padding=40, spacing=14)
+        lay.add_widget(Label(text='Создать игру',
+                             font_size='24sp', bold=True,
+                             color=(0, 0, 0.5, 1), size_hint_y=0.25))
+        self.bt_host_code = Label(text='Код: ---',
+                                  font_size='28sp', bold=True,
+                                  color=(0, 0.5, 0, 1), size_hint_y=0.2)
+        lay.add_widget(self.bt_host_code)
+        lay.add_widget(Label(text='Отправьте код другу.\n'
+                                 'Он должен ввести его в "Присоединиться".',
+                             font_size='15sp', color=(0.3, 0.3, 0.3, 1),
+                             halign='center', size_hint_y=0.15))
+        b = Button(text='Отмена', size_hint_y=None, height='55dp')
+        b.bind(on_release=lambda *_: self.bt_cancel_host())
+        lay.add_widget(b)
+        scr.add_widget(lay)
+        self.sm.add_widget(scr)
+
+        # --- блютуз: присоединиться ---
+        scr = Screen(name='bluetooth_join')
+        lay = BoxLayout(orientation='vertical', padding=40, spacing=14)
+        lay.add_widget(Label(text='Присоединиться к игре',
+                             font_size='24sp', bold=True,
+                             color=(0, 0, 0.5, 1), size_hint_y=0.2))
+        self.bt_join_input = TextInput(hint_text='Код друга (XXXXX)',
+                                       multiline=False, font_size='24sp',
+                                       size_hint_y=None, height='70dp',
+                                       font_name='DejaVuSans',
+                                       input_filter=lambda t, _: t.upper())
+        lay.add_widget(self.bt_join_input)
+        b = Button(text='Подключиться', size_hint_y=None, height='60dp',
+                   background_color=(0.6, 0.95, 0.6, 1),
+                   font_name='DejaVuSans')
+        b.bind(on_release=lambda *_: self.bt_do_join())
+        lay.add_widget(b)
+        b = Button(text='Назад', size_hint_y=None, height='55dp')
+        b.bind(on_release=lambda *_: self.go('bluetooth'))
+        lay.add_widget(b)
+        scr.add_widget(lay)
+        self.sm.add_widget(scr)
+
+        # --- блютуз: меню выбора ---
+        scr = Screen(name='bluetooth')
+        lay = BoxLayout(orientation='vertical', padding=40, spacing=14)
+        lay.add_widget(Label(text='БЛЮТУЗ-БИТВА',
+                             font_size='24sp', bold=True,
+                             color=(0, 0, 0.5, 1), size_hint_y=0.2))
+        b = Button(text='Создать игру (Хост)',
+                   size_hint_y=None, height='70dp',
+                   background_color=(0.6, 0.95, 0.6, 1),
+                   font_name='DejaVuSans', font_size='18sp')
+        b.bind(on_release=lambda *_: self.bt_start_host())
+        lay.add_widget(b)
+        b = Button(text='Присоединиться к игре',
+                   size_hint_y=None, height='70dp',
+                   background_color=(0.6, 0.85, 1, 1),
+                   font_name='DejaVuSans', font_size='18sp')
+        b.bind(on_release=lambda *_: self.go('bluetooth_join'))
+        lay.add_widget(b)
+        b = Button(text='Назад', size_hint_y=None, height='55dp')
+        b.bind(on_release=lambda *_: self.go('menu'))
+        lay.add_widget(b)
+        scr.add_widget(lay)
+        self.sm.add_widget(scr)
+
+        # --- блютуз: ожидание подключения ---
+        scr = Screen(name='bluetooth_wait')
+        lay = BoxLayout(orientation='vertical', padding=40, spacing=14)
+        lay.add_widget(Label(text='Ожидание соперника...',
+                             font_size='22sp', bold=True,
+                             color=(0, 0.5, 0, 1), size_hint_y=0.3))
+        self.bt_wait_code = Label(text='Ваш код: ---',
+                                  font_size='20sp', bold=True,
+                                  color=(0, 0.5, 0, 1), size_hint_y=0.2)
+        lay.add_widget(self.bt_wait_code)
+        b = Button(text='Отмена', size_hint_y=None, height='55dp')
+        b.bind(on_release=lambda *_: self.bt_cancel_host())
+        lay.add_widget(b)
+        scr.add_widget(lay)
+        self.sm.add_widget(scr)
 
         # --- игра ---
         self.sm.add_widget(self.make_game_screen())
@@ -815,6 +1113,89 @@ class TrigBattleApp(App):
         self.go('game')
         self.set_msg('ЛОКАЛЬНАЯ ИГРА. Игрок 1 расставляет юниты на ЛЕВОМ '
                      'поле', (0, 0, 0.5, 1))
+
+    # ===================== BLUETOOTH P2P =====================
+    def bt_start_host(self):
+        code = bt_manager.generate_code()
+        self.bt_wait_code.text = f'Ваш код: {code}'
+        self.go('bluetooth_wait')
+        bt_manager.start_host(code, self._on_bt_connected)
+
+    def bt_do_join(self):
+        code = self.bt_join_input.text.strip().upper()
+        if len(code) != 5:
+            self.set_msg('Код должен быть 5 символов!', (0.7,0,0,1))
+            return
+        self.go('bluetooth_wait')
+        self.bt_wait_code.text = f'Подключение к {self.bt_join_input.text.upper()}...'
+        bt_manager.connect_to_host(self.bt_join_input.text.upper(), self._on_bt_connected)
+
+    def _on_bt_connected(self):
+        self.set_msg('Подключено! Расставляйте корабли.', (0, 0.5, 0, 1))
+        self.game['mode'] = 'bluetooth'
+        self.reset_game()
+        self.go('game')
+        # регистрируем callback для входящих сообщений
+        bt_manager.callbacks['data'] = self._on_bt_data
+
+    def _on_bt_data(self, msg):
+        """Обработка входящих блютуз-сообщений."""
+        mtype = msg.get('type')
+        if mtype == 'move':
+            # соперник сделал ход
+            self._on_bt_move(msg)
+        elif mtype == 'game_over':
+            self._on_bt_game_over(msg)
+
+    def _on_bt_move(self, msg):
+        """Обработка хода соперника."""
+        result = msg.get('result')
+        x, y = msg.get('x'), msg.get('y')
+        point = msg.get('point')
+        
+        # применяем ход к нашему полю (FL - наше поле)
+        target = self.FL
+        res = fire_at(target, x, y)
+        
+        self.update_panels()
+        self.redraw_all()
+        
+        if res == 'sunk':
+            self.set_msg(f'Соперник потопил ваш корабль!', (0.7, 0, 0, 1))
+        elif res == 'hit':
+            self.set_msg(f'Соперник попал в ({x:.1f}, {y:.1f})!', (0.7, 0, 0, 1))
+        else:
+            self.set_msg(f'Соперник промахнулся в ({x:.1f}, {y:.1f}). Ваш ход.', (0, 0.5, 0, 1))
+        
+        # проверка победы
+        if all_sunk(self.FL['units']):
+            self.game['phase'] = 'over'
+            self.set_msg('Соперник победил!', (0.7, 0, 0, 1))
+            self.show_victory('Победил соперник!')
+            return
+        
+        # ход переходит к нам
+        self.game['turn'] = 'player1'
+        self.set_msg('Ваш ход!', (0, 0.5, 0, 1))
+        self.update_panels()
+        self.redraw_all()
+
+    def _on_bt_game_over(self, msg):
+        winner = msg.get('winner', 'Соперник')
+        self.game['phase'] = 'over'
+        self.show_victory(f'Победил {winner}!')
+
+    def show_host_code(self, code):
+        self.bt_host_code.text = f'Код: {code}'
+        self.go('bluetooth_host')
+
+    def bt_cancel_host(self):
+        bt_manager.disconnect()
+        self.go('bluetooth')
+
+    def bt_send_move(self, msg):
+        if bt_manager:
+            bt_manager.send(msg)
 
     # ===================== ТУТОРИАЛ =====================
     TUT_STEPS = [
@@ -1198,6 +1579,10 @@ class TrigBattleApp(App):
                 self.b_start.text = 'Бой идёт'
                 self.set_msg('ВАШ ХОД: цельтесь на правом поле и жмите '
                              '"Совершить ход"', (0, 0.5, 0, 1))
+            elif g['mode'] == 'bluetooth':
+                # В блютуз-режиме: ждём, пока второй игрок тоже поставит корабли
+                self.set_msg('Ожидаем, пока соперник расставит корабли...', (0.3, 0.3, 0.5, 1))
+                g['phase'] = 'place2_wait'
             else:
                 g['phase'] = 'place2'
                 self.b_start.text = 'Готово (Игрок 2)'
@@ -1213,6 +1598,10 @@ class TrigBattleApp(App):
             self.b_start.text = 'Бой идёт'
             self.set_msg('ХОД ИГРОКА 1 (прицел на правом поле)',
                          (0, 0.5, 0, 1))
+        elif g['phase'] == 'place2_wait':
+            # Блютуз: ждём, пока соперник тоже нажмёт "Начать бой"
+            self.set_msg('Ожидаем готовности соперника...', (0.3, 0.3, 0.5, 1))
+            return
         else:
             return
         self.unit_state.update(selected=None, last=None)
@@ -1273,11 +1662,22 @@ class TrigBattleApp(App):
                          (0, 0.5, 0, 1))
             self.update_panels()
             self.redraw_all()
-            self.show_victory(f'Победил {winner}!')
+            self.show_victory(f'Победил {self.nickname}!')
+            # отправляем победу сопернику
+            self.bt_send_move({'type': 'game_over', 'winner': self.nickname})
             return
 
         # ПРАВИЛО 6: попадание -> соперник пропускает ход
         extra_turn = result in ('hit', 'sunk')
+
+        # отправляем ход сопернику по блютузу
+        if g['mode'] == 'bluetooth':
+            self.bt_send_move({
+                'type': 'move',
+                'point': self.shot_sel,
+                'x': P[0], 'y': P[1],
+                'result': result
+            })
 
         if g['mode'] == 'ai':
             if extra_turn:
@@ -1298,11 +1698,14 @@ class TrigBattleApp(App):
             else:
                 g['turn'] = 'player2' if g['turn'] == 'player1' \
                     else 'player1'
-                # экран ожидания: всё скрыто до тапа следующего игрока
-                g['awaiting_tap'] = True
-                n = '2' if g['turn'] == 'player2' else '1'
-                self.set_msg(f'Игрок {n} нажмите на экран',
-                             (0, 0, 0.5, 1))
+                # в блютуз-режиме нет экрана "нажмите на экран"
+                if g['mode'] == 'bluetooth':
+                    self.set_msg(f'{shooter}: {res_txt}  Ход соперника...', (0, 0.5, 0, 1))
+                else:
+                    g['awaiting_tap'] = True
+                    n = '2' if g['turn'] == 'player2' else '1'
+                    self.set_msg(f'Игрок {n} нажмите на экран',
+                                 (0, 0, 0.5, 1))
             self.update_panels()
             self.redraw_all()
 
@@ -1319,11 +1722,13 @@ class TrigBattleApp(App):
         box = BoxLayout(orientation='vertical', padding=12, spacing=10)
         box.add_widget(Label(text=text, font_size='22sp', bold=True,
                              color=(0, 0, 0.5, 1)))
+        box.add_widget(Label(text=f'Победитель: {self.nickname}',
+                             font_size='16sp', color=(0, 0.5, 0, 1)))
         btn = Button(text='Показать раскладку', size_hint_y=None,
                      height='55dp', font_name='DejaVuSans')
         box.add_widget(btn)
         popup = Popup(title='Игра окончена', content=box,
-                      size_hint=(0.7, 0.45), auto_dismiss=False)
+                      size_hint=(0.7, 0.5), auto_dismiss=False)
         btn.bind(on_release=lambda *_: (popup.dismiss(),
                                         self.redraw_all()))
         popup.open()
