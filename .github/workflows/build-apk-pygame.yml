@@ -48,10 +48,16 @@ jobs:
           restore-keys: |
             buildozer-pygame-${{ runner.os }}-
 
+      - name: Install Buildozer
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade buildozer cython
+          buildozer --version
+
       - name: Sanity check (игра импортируется)
         run: |
-          python3 -m pip install --upgrade pip pygame
-          cd ready_apk && python3 -c "import main; print('entry point ok')"
+          python -m pip install --upgrade pygame
+          cd ready_apk && python -c "import main; print('entry point ok')"
 
       - name: Build APK
         working-directory: ready_apk
