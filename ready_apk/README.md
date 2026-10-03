@@ -9,6 +9,7 @@ ready_apk/
 ├── trig_battle_pygame.py   игра ( pygame, без numpy/matplotlib )
 ├── main.py                 точка входа для buildozer
 ├── buildozer.spec          настройки сборки
+├── p4a-recipes/pygame/     локальный рецепт p4a (фикс под Python 3.11+)
 ├── build_apk.sh            однокомандная сборка (Linux/WSL)
 └── README.md               этот файл
 ```
@@ -78,7 +79,8 @@ pygame 2.1.0 не собирается: его C-код использует `lo
 удалённый в Python 3.12+ |
 | `orientation` | `landscape` | игра рассчитана на альбомную ориентацию |
 | `android.permissions` | пусто | игре не нужны ни сеть, ни геолокация |
-| `android.archs` | `arm64-v8a, armeabi-v7a` | реальные телефоны, меньший вес и быстрее сборка |
+| `android.archs` | `arm64-v8a` | все современные телефоны; APK вдвое меньше и вдвое быстрее сборка. 32-битный armeabi-v7a на свежих NDK ломается на `grpmodule.c` |
+| `p4a.local_recipes` | `./p4a-recipes` | свой рецепт pygame: отключает `CYTHON_USE_PYLONG_INTERNALS`, без чего pygame 2.1.0 не собирается на Python 3.11+ (не находит `longintrepr.h`) |
 | `version` / `package.name` | `0.2.0` / `trigbattle` | итоговый файл `trigbattle_0.2.0.apk` |
 | `android.accept_sdk_license` | `True` | нужно для CI |
 

@@ -47,7 +47,7 @@ jobs:
             ~/.buildozer
           # Ключ НЕ зависит от buildozer.spec: иначе смена версии или
           # requirements заставила бы заново качать SDK/NDK (~2 ГБ).
-          key: buildozer-pygame-${{ runner.os }}-p4a2024
+          key: buildozer-pygame-${{ runner.os }}-p4a2024-arm64
           restore-keys: |
             buildozer-pygame-${{ runner.os }}-
 

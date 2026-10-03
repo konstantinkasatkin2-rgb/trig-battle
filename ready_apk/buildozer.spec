@@ -36,8 +36,10 @@ android.permissions =
 #android.api = 33
 android.minapi = 21
 
-# (list) Только ARM — APK заметно меньше и собирается быстрее
-android.archs = arm64-v8a, armeabi-v7a
+# (str) Только arm64-v8a: все современные телефоны, APK вдвое меньше
+# и собирается вдвое быстрее. 32-битный armeabi-v7a на свежих NDK
+# дополнительно ломается на grpmodule.c, так что он не нужен.
+android.archs = arm64-v8a
 
 # (bool) Automatically accept Android SDK licenses (нужно для CI)
 android.accept_sdk_license = True
@@ -51,6 +53,10 @@ p4a.branch = v2024.01.21
 
 # Нужен SDL2 (pygame 2.x не собирается под SDL1)
 p4a.bootstrap = sdl2
+
+# Локальный рецепт pygame: выключает CYTHON_USE_PYLONG_INTERNALS,
+# иначе pygame 2.1.0 не компилируется на Python 3.11+ (longintrepr.h).
+p4a.local_recipes = ./p4a-recipes
 
 # (str) Android NDK version to use
 #android.ndk = 25b
