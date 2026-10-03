@@ -91,3 +91,11 @@ class TrigbattleSrcRecipe(Recipe):
             if exists(path):
                 shutil.copy(path, join(dest, res))
                 info('trigbattle_src: {} -> {}'.format(res, dest))
+
+
+# python-for-android загружает рецепт и достаёт из модуля ИМЕННО объект с
+# именем `recipe` (pythonforandroid/recipe.py: `recipe = mod.recipe`).
+# Без этой строки p4a падает с
+#   AttributeError: module 'pythonforandroid.recipes.trigbattle_src'
+#                  has no attribute 'recipe'
+recipe = TrigbattleSrcRecipe()

@@ -75,6 +75,17 @@ def main():
     print('Проверка рецепта trigbattle_src')
     mod, Ctx = load_recipe_with_stubs(None)
 
+    # --- проверка 0: p4a достаёт из модуля объект с именем `recipe`.
+    #     Именно на этом уже падал рецепт: класс был назван иначе, и
+    #     python-for-android ругался
+    #     «has no attribute 'recipe'» — через 9 минут сборки.
+    print(' проверка 0: модуль отдаёт объект `recipe` (его ждёт p4a)')
+    obj = getattr(mod, 'recipe', None)
+    ok &= check(obj is not None, 'объект recipe есть',
+                'нет атрибута `recipe` — p4a упадёт с AttributeError')
+    ok &= check(isinstance(obj, mod.Recipe), 'recipe — экземпляр Recipe',
+                'recipe не является экземпляром Recipe')
+
     # --- случай 1: раскладка как в репозитории — игра в корне проекта,
     #     рецепт в <корень>/p4a-recipes/trigbattle_src
     with tempfile.TemporaryDirectory() as tmp:
@@ -88,7 +99,7 @@ def main():
                 fd.write('# ' + name + '\n')
 
         site = os.path.join(tmp, 'site-packages')
-        r = mod.TrigbattleSrcRecipe()
+        r = mod.recipe          # берём ровно тот объект, который возьмёт p4a
         r.ctx = Ctx(recipes, site)
         r.build_arch(type('Arch', (), {'arch': 'arm64-v8a'})())
 
@@ -103,7 +114,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         recipes = os.path.join(tmp, 'p4a-recipes')
         os.makedirs(os.path.join(recipes, 'trigbattle_src'))
-        r = mod.TrigbattleSrcRecipe()
+        r = mod.recipe          # берём ровно тот объект, который возьмёт p4a
         r.ctx = Ctx(recipes, os.path.join(tmp, 'site-packages'))
         print(' случай 2: файлов игры нет')
         try:
