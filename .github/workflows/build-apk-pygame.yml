@@ -1,0 +1,65 @@
+name: Build APK (pygame)
+
+# Собирает APK из ready_apk/ в облаке GitHub.
+# После успешной сборки APK появится во вкладке Actions -> Artifacts.
+# Запуск: push в ветку или кнопка "Run workflow".
+
+on:
+  push:
+    paths:
+      - 'ready_apk/**'
+      - '.github/workflows/build-apk-pygame.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf \
+            libtool libltdl-dev pkg-config zlib1g-dev libncurses-dev \
+            libffi-dev libssl-dev cmake ccache
+
+      - name: Cache buildozer / SDK / NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ready_apk/.buildozer
+            ~/.buildozer
+          key: buildozer-pygame-${{ runner.os }}-${{ hashFiles('ready_apk/buildozer.spec') }}
+          restore-keys: |
+            buildozer-pygame-${{ runner.os }}-
+
+      - name: Sanity check (игра импортируется)
+        run: |
+          python3 -m pip install --upgrade pip pygame
+          cd ready_apk && python3 -c "import main; print('entry point ok')"
+
+      - name: Build APK
+        working-directory: ready_apk
+        run: buildozer android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: trig-battle-pygame-apk
+          path: ready_apk/bin/*.apk
+          if-no-files-found: error

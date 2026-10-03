@@ -2,10 +2,17 @@ __pycache__/
 *.pyc
 android/.buildozer/
 android/bin/
+android-pygame/.buildozer/
+android-pygame/bin/
+ready_apk/.buildozer/
+ready_apk/bin/
+apk-new/
 .kivy/
 build/
 dist/
 *.spec
+# ...кроме специфика сборки pygame-версии (он нужен в CI)
+!ready_apk/buildozer.spec
 apk-download/
 users.db
 db_key.key

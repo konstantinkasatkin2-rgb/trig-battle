@@ -7,6 +7,11 @@
 
 - **`trig_circle.py`** — настольная версия на matplotlib (Windows/Linux).
   Запуск: `python trig_circle.py`
+- **`trig_battle_pygame.py`** — версия на **pygame**: работает и на ПК, и на
+  Android (мышь + тач, экранная клавиатура для ввода sin/cos/tg/ctg).
+  Запуск: `pip install pygame` → `python trig_battle_pygame.py`
+  Сборка APK: `buildozer -c android-pygame/buildozer.spec android debug`
+  (см. `android-pygame/`)
 - **`android/main.py`** — мобильная версия на Kivy (также работает на ПК).
   Запуск: `python android/main.py`
 
