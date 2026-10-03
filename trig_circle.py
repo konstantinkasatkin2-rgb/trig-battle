@@ -29,7 +29,7 @@ ANGLE1_0 = 50
 ANGLE2_0 = 110
 HIT_TOL = 0.05
 FADE = 0.1
-FLEET_SHIPS  = {1: 5, 2: 4, 3: 3, 4: 2, 5: 1}
+FLEET_SHIPS  = {1: 4, 2: 4, 3: 3, 4: 2, 5: 1}
 FLEET_PLANES = {1: 3, 2: 2, 3: 1}
 MAX_SIZE = {'ship': 5, 'plane': 3}
 UNIT_STYLE = {'ship':  {'marker': 'o', 'color': 'navy'},
@@ -42,7 +42,8 @@ ALL_CELLS = [(round(i * GRID, 2), round(j * GRID, 2))
              for i in range(-16, 17) for j in range(-16, 17)]
 SQ_CELLS = [c for c in ALL_CELLS if abs(c[0]) <= 1 and abs(c[1]) <= 1]
 
-settings = {'planes': True, 'music': False, 'difficulty': 'Средний'}
+settings = {'planes': True, 'music': False, 'hints': False,
+            'difficulty': 'Средний'}
 
 fig = plt.figure(figsize=(16, 9))
 fig.canvas.manager.set_window_title('Тригонометрический морской бой')
@@ -168,10 +169,7 @@ def draw_kit(kit, angle_deg, primary):
     kit['pt'].set_data([c], [s])
     kit['cos_line'].set_data([c, c], [0, s])
     kit['sin_line'].set_data([0, c], [s, s])
-    arc_t = np.linspace(0, a, 120)
-    kit['arc'].set_data(0.25 * np.cos(arc_t), 0.25 * np.sin(arc_t))
-    kit['ang_txt'].set_position((0.34 * np.cos(a / 2), 0.34 * np.sin(a / 2)))
-    kit['ang_txt'].set_text(f'{angle_deg:.0f}°')
+    # дуга и подпись угла убраны по запросу пользователя
     m = max(abs(c), abs(s))
     bx, by = (c / m, s / m) if m > 0 else (0.0, 0.0)
     kit['tg_line'].set_data([0, bx], [0, by])
@@ -228,7 +226,7 @@ def draw_aim(aim, vals):
     draw_kit(aim['kit2'], slider2.val, primary=False)
 
     if tg2 is not None:
-        Px, Py = c1, tg2 * c1
+        Px, Py = c1, float(np.clip(tg2 * c1, -1.0, 1.0))
         aim['ext1'].set_data([c1, c1], [s1, Py])
         aim['i1'].set_data([Px], [Py])
         aim['t1'].set_position((
@@ -243,7 +241,7 @@ def draw_aim(aim, vals):
         p1_str = 'нет'
 
     if ctg2 is not None:
-        Qx, Qy = ctg2 * s1, s1
+        Qx, Qy = float(np.clip(ctg2 * s1, -1.0, 1.0)), s1
         aim['ext2'].set_data([c1, Qx], [s1, s1])
         aim['i2'].set_data([Qx], [Qy])
         aim['t2'].set_position((
@@ -257,6 +255,13 @@ def draw_aim(aim, vals):
         aim['t2'].set_text('')
         p2_str = 'нет'
 
+    # выбранная точка огня яркая, вторая — прозрачная
+    on1 = shot_sel['p'] == 'P₁'
+    aim['i1'].set_alpha(1.0 if on1 else 0.15)
+    aim['t1'].set_alpha(1.0 if on1 else 0.15)
+    aim['i2'].set_alpha(0.15 if on1 else 1.0)
+    aim['t2'].set_alpha(0.15 if on1 else 1.0)
+
     f = lambda v: f'{v: .2f}' if v is not None else '   —'
     aim['info'].set_text(
         f'угол 1 = {slider1.val:5.1f}°\n'
@@ -269,7 +274,7 @@ def draw_aim(aim, vals):
 
 def active_aim():
     """Прицел активен только в бою, на поле текущего стрелка."""
-    if game['phase'] != 'battle':
+    if game['phase'] != 'battle' or game.get('awaiting_tap'):
         return None
     if game['mode'] == 'ai':
         return aimR
@@ -279,8 +284,11 @@ def active_aim():
 def update_all(_=None):
     vals = compute_angles()
     c1, s1, c2, s2, tg2, ctg2 = vals
-    state['P1'] = (c1, tg2 * c1) if tg2 is not None else None
-    state['P2'] = (ctg2 * s1, s1) if ctg2 is not None else None
+    # точки пересечения не выходят за пределы квадрата [-1, 1]
+    state['P1'] = (c1, float(np.clip(tg2 * c1, -1.0, 1.0))) \
+        if tg2 is not None else None
+    state['P2'] = (float(np.clip(ctg2 * s1, -1.0, 1.0)), s1) \
+        if ctg2 is not None else None
     act = active_aim()
     for aim in (aimL, aimR):
         if aim is act:
@@ -293,13 +301,17 @@ def update_all(_=None):
 # ===================== ПОЛЯ И ЮНИТЫ =====================
 def make_field(ax, name):
     return {
-        'ax': ax, 'name': name, 'units': [], 'misses': [],
+        'ax': ax, 'name': name, 'units': [], 'misses': [], 'hints': set(),
         'hit_layer':  ax.plot([], [], linestyle='', marker='x', color='red',
                               ms=14, mew=3, zorder=8)[0],
         'miss_layer': ax.plot([], [], linestyle='', marker='o',
                               color='silver', mec='gray', ms=6, zorder=7)[0],
         'halo_layer': ax.plot([], [], linestyle='', marker='x', color='gray',
                               ms=10, mew=2, zorder=7)[0],
+        'hint_layer': ax.plot([], [], linestyle='', marker='o',
+                              markerfacecolor='none',
+                              markeredgecolor='darkorange',
+                              ms=22, mew=2.5, zorder=9)[0],
         'preview':    ax.plot([], [], 'o-', lw=3, ms=8, alpha=0.55,
                               color='lime', zorder=6)[0],
     }
@@ -322,7 +334,9 @@ game_msg = fig.text(0.5, 0.955, '', ha='center', va='center',
 unit_state = {'size': 3, 'dir_idx': 0, 'selected': None, 'last': None}
 mode = {'name': 'angles'}
 game = {'mode': 'ai', 'phase': 'place1', 'turn': 'player1',
-        'my_moves': 0, 'enemy_moves': 0, 'last': '—'}
+        'my_moves': 0, 'enemy_moves': 0, 'last': '—',
+        'awaiting_tap': False,
+        'streak': {'player1': 0, 'player2': 0}}
 enemy_ai = {'tried': set(), 'hunt': [], 'thits': []}
 shot_sel = {'p': 'P₁'}
 
@@ -507,6 +521,9 @@ def unit_visible(un, fld):
     """Классические правила скрытия: чужие юниты не видны (кроме потопленных)."""
     if game['phase'] == 'over' or is_sunk(un):
         return True
+    # локальная игра: экран "нажмите на экран" — всё скрыто
+    if game.get('awaiting_tap') and game['phase'] == 'battle':
+        return False
     if game['mode'] == 'ai':
         return fld is FL
     if game['phase'] == 'place1':
@@ -559,6 +576,12 @@ def refresh_field(fld):
     fld['halo_layer'].set_data(hx, hy)
     fld['miss_layer'].set_data([m[0] for m in fld['misses']],
                                [m[1] for m in fld['misses']])
+    # подсказки (оранжевые кольца), кроме уже подбитых точек
+    hit_pts = {(p) for un in fld['units'] for p in un['hits']}
+    hints = [q for q in fld['hints'] if q not in hit_pts]
+    fld['hint_layer'].set_data([q[0] for q in hints],
+                               [q[1] for q in hints])
+    fld['hint_layer'].set_visible(not game.get('awaiting_tap'))
     apply_visibility()
 
 
@@ -637,6 +660,7 @@ def enemy_turn():
     if all_sunk(FL['units']):
         game['phase'] = 'over'
         set_msg('ПРОТИВНИК ПОБЕДИЛ. Все ваши юниты потоплены.', 'darkred')
+        show_victory('Победил противник (ИИ)!')
         apply_visibility()
     elif result in ('hit', 'sunk'):
         # ПРАВИЛО 6 (для ИИ): попадание -> игрок пропускает ход
@@ -673,6 +697,19 @@ def make_move(_=None):
                    'miss': 'МИМО'}[result]
 
     game['my_moves'] += 1
+
+    # подсказка: 15 промахов подряд -> раскрыть одну вражескую клетку
+    if settings['hints']:
+        key = 'player1' if (game['mode'] == 'ai' or
+                            game['turn'] == 'player1') else 'player2'
+        if result == 'miss':
+            game['streak'][key] += 1
+            if game['streak'][key] >= 15:
+                game['streak'][key] = 0
+                if reveal_hint(target):
+                    res_txt += ' 💡подсказка!'
+        else:
+            game['streak'][key] = 0
     game['last'] = res_txt
     refresh_field(target)
     update_panels()
@@ -682,9 +719,11 @@ def make_move(_=None):
         if game['mode'] == 'ai':
             set_msg(f'ПОБЕДА! Флот противника уничтожен за '
                     f'{game["my_moves"]} ходов!', 'darkgreen')
+            show_victory('Победил Игрок 1!')
         else:
             set_msg(f'{shooter.upper()} ПОБЕДИЛ! Все юниты соперника '
                     f'потоплены.', 'darkgreen')
+            show_victory(f'Победил {shooter}!')
         apply_visibility()
         return
 
@@ -713,13 +752,23 @@ def make_move(_=None):
         else:
             game['turn'] = 'player2' if game['turn'] == 'player1' \
                 else 'player1'
-            nxt = 'Игрок 1' if game['turn'] == 'player1' else 'Игрок 2'
-            side = 'правом' if game['turn'] == 'player1' else 'левом'
-            set_msg(f'{shooter}: {res_txt}   →   ХОД {nxt.upper()}А '
-                    f'(прицел на {side} поле)', 'darkgreen')
+            # экран ожидания: всё скрыто до клика следующего игрока
+            game['awaiting_tap'] = True
+            n = '2' if game['turn'] == 'player2' else '1'
+            set_msg(f'Игрок {n} нажмите на экран', 'navy')
             apply_visibility()
     update_panels()
     update_all()
+
+
+def reveal_hint(fld):
+    """Раскрыть одну случайную неподбитую клетку противника."""
+    cands = [p for un in fld['units'] for p in un['pts']
+             if p not in un['hits']]
+    if cands:
+        fld['hints'].add(random.choice(cands))
+        return True
+    return False
 
 
 def advance(_=None):
@@ -764,12 +813,14 @@ def reset_game():
             un['line'].remove()
         fld['units'].clear()
         fld['misses'].clear()
+        fld['hints'].clear()
         refresh_field(fld)
     enemy_ai['tried'].clear()
     enemy_ai['hunt'].clear()
     enemy_ai['thits'].clear()
     game.update(phase='place1', turn='player1', my_moves=0,
-                enemy_moves=0, last='—')
+                enemy_moves=0, last='—', awaiting_tap=False,
+                streak={'player1': 0, 'player2': 0})
     unit_state.update(selected=None, last=None)
     btn_start.label.set_text('Начать бой' if game['mode'] == 'ai'
                              else 'Готово (Игрок 1)')
@@ -909,7 +960,7 @@ for t in shot_ax.texts:
 
 def on_shot(label):
     shot_sel['p'] = label
-    fig.canvas.draw_idle()
+    update_all()
 
 
 shot_radio.on_clicked(on_shot)
@@ -1163,8 +1214,25 @@ ui_checkbox('settings', 0.36, 0.60, 'Включить самолеты',
 ui_checkbox('settings', 0.36, 0.52, 'Включить музыку (будет потом)',
             lambda: settings['music'],
             lambda v: settings.__setitem__('music', v))
+ui_checkbox('settings', 0.36, 0.44, 'Включить подсказки',
+            lambda: settings['hints'],
+            lambda v: settings.__setitem__('hints', v))
 ui_button('settings', 0.38, 0.22, 0.24, 0.08, 'Назад',
           lambda: show_screen('menu'), color='lightgray')
+
+# --- Экран победы ---
+victory_title = ui_text('victory', 0.5, 0.62, '', fontsize=26,
+                        fontweight='bold', color='darkgreen')
+ui_button('victory', 0.36, 0.42, 0.28, 0.09, 'Показать раскладку',
+          lambda: show_screen('game'), color='honeydew', fontsize=15)
+ui_button('victory', 0.36, 0.29, 0.28, 0.09, 'В меню',
+          lambda: show_screen('menu'), color='lightgray', fontsize=15)
+
+
+def show_victory(text):
+    victory_title.set_text(text)
+    show_screen('victory')
+
 
 # --- Обратная связь ---
 ui_text('feedback', 0.5, 0.6, 'Обратная связь:\n\n'
@@ -1180,6 +1248,16 @@ dragging = {'btn': None}
 
 def on_press(event):
     on_ui_press(event)
+    # локальная игра: экран ожидания — клик следующего игрока
+    if game.get('awaiting_tap') and game['phase'] == 'battle':
+        game['awaiting_tap'] = False
+        nxt = 'ИГРОКА 1' if game['turn'] == 'player1' else 'ИГРОКА 2'
+        side = 'правом' if game['turn'] == 'player1' else 'левом'
+        set_msg(f'ХОД {nxt} (прицел на {side} поле)', 'darkgreen')
+        apply_visibility()
+        update_panels()
+        update_all()
+        return
     if event.xdata is None:
         return
     aim = active_aim()

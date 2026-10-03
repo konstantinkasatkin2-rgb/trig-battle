@@ -17,6 +17,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen, ScreenManager
 from kivy.uix.slider import Slider
 from kivy.uix.textinput import TextInput
@@ -26,7 +27,7 @@ from kivy.uix.widget import Widget
 GRID = 0.1
 LIMIT = 1.6
 HIT_TOL = 0.05
-FLEET_SHIPS = {1: 5, 2: 4, 3: 3, 4: 2, 5: 1}
+FLEET_SHIPS = {1: 4, 2: 4, 3: 3, 4: 2, 5: 1}
 FLEET_PLANES = {1: 3, 2: 2, 3: 1}
 MAX_SIZE = {'ship': 5, 'plane': 3}
 DIRECTIONS = [(1, 0), (1, 1), (0, 1), (-1, 1),
@@ -321,9 +322,17 @@ class BoardWidget(Widget):
                     px, py = self.to_px(*q)
                     self.draw_x(px, py, 8, 3)
 
+            # подсказки (оранжевые кольца на раскрытых клетках)
+            if not app.game.get('awaiting_tap'):
+                Color(1.0, 0.55, 0.0, 1)
+                for q in fld['hints']:
+                    px, py = self.to_px(*q)
+                    Line(circle=(px, py, 11), width=2.5)
+
             # прицел в стиле настольной версии
             if app.aim_side() == self.side and \
-                    app.game['phase'] == 'battle':
+                    app.game['phase'] == 'battle' and \
+                    not app.game.get('awaiting_tap'):
                 self.draw_aim(app, cx, cy, r)
 
     # ---------- прицел (как на ПК) ----------
@@ -333,16 +342,12 @@ class BoardWidget(Widget):
         a2 = math.radians(app.slider2.value)
         c1, s1 = math.cos(a1), math.sin(a1)
         c2, s2 = math.cos(a2), math.sin(a2)
-        r_arc = r_circle * 0.25
 
-        # --- угол 1: луч, дуга, проекции ---
+        # --- угол 1: луч и проекции ---
         Color(0.6, 0.1, 0.8, 1)
         Line(points=[cx, cy, *self.to_px(c1, s1)], width=2)
-        Line(circle=(cx, cy, r_arc, 0, app.slider1.value), width=1.2)
         p1x, p1y = self.to_px(c1, s1)
         Ellipse(pos=(p1x - 4, p1y - 4), size=(8, 8))
-        self.draw_text(0.34 * math.cos(a1 / 2), 0.34 * math.sin(a1 / 2),
-                       f'{int(app.slider1.value)}°', (0.6, 0.1, 0.8, 1), 9)
         Color(0, 0, 1, F)
         Line(points=[*self.to_px(c1, 0), *self.to_px(c1, s1)], width=1.2)
         Line(points=[*self.to_px(0, s1), *self.to_px(c1, s1)], width=1.2)
@@ -350,14 +355,11 @@ class BoardWidget(Widget):
         self.draw_text(-0.03, s1, f'sin={s1:.2f}', (0, 0, 1, F), 8,
                        anchor='rm')
 
-        # --- угол 2: луч, дуга, проекции ---
+        # --- угол 2: луч и проекции ---
         Color(0.85, 0.55, 0.0, 1)
         Line(points=[cx, cy, *self.to_px(c2, s2)], width=2)
-        Line(circle=(cx, cy, r_arc, 0, app.slider2.value), width=1.2)
         p2x, p2y = self.to_px(c2, s2)
         Ellipse(pos=(p2x - 4, p2y - 4), size=(8, 8))
-        self.draw_text(0.34 * math.cos(a2 / 2), 0.34 * math.sin(a2 / 2),
-                       f'{int(app.slider2.value)}°', (0.85, 0.55, 0.0, 1), 9)
         Color(0.5, 0.5, 0.5, F)
         Line(points=[*self.to_px(c2, 0), *self.to_px(c2, s2)], width=1.2)
         Line(points=[*self.to_px(0, s2), *self.to_px(c2, s2)], width=1.2)
@@ -387,24 +389,27 @@ class BoardWidget(Widget):
                      close=True, width=1.6)
 
         # --- точки пересечения P1 / P2 ---
+        # выбранная точка огня яркая, вторая — прозрачная
+        a1 = 1.0 if app.shot_sel == 'P1' else 0.15
+        a2 = 1.0 if app.shot_sel == 'P2' else 0.15
         if app.state['P1'] is not None:
             Px, Py = app.state['P1']
             if -LIMIT <= Px <= LIMIT and -LIMIT <= Py <= LIMIT:
                 px, py = self.to_px(Px, Py)
-                Color(0, 0, 0, 1)
+                Color(0, 0, 0, a1)
                 self.draw_star(px, py, 10)
                 self.draw_text(Px + 0.05, Py,
-                               f'P₁ = ({Px:.2f}, {Py:.2f})',
-                               (0, 0, 0, 1), 8, anchor='lm', bold=True)
+                               f'P1 = ({Px:.2f}, {Py:.2f})',
+                               (0, 0, 0, a1), 8, anchor='lm', bold=True)
         if app.state['P2'] is not None:
             Qx, Qy = app.state['P2']
             if -LIMIT <= Qx <= LIMIT and -LIMIT <= Qy <= LIMIT:
                 px, py = self.to_px(Qx, Qy)
-                Color(0, 0.5, 0.15, 1)
+                Color(0, 0.5, 0.15, a2)
                 self.draw_star(px, py, 10)
                 self.draw_text(Qx + 0.05, Qy,
-                               f'P₂ = ({Qx:.2f}, {Qy:.2f})',
-                               (0, 0.5, 0.15, 1), 8, anchor='lm', bold=True)
+                               f'P2 = ({Qx:.2f}, {Qy:.2f})',
+                               (0, 0.5, 0.15, a2), 8, anchor='lm', bold=True)
 
         # --- инфо-панель (как на ПК) ---
         tg2s = f'{s2 / c2: .2f}' if abs(c2) > 1e-9 else '   —'
@@ -418,8 +423,8 @@ class BoardWidget(Widget):
             f'  sin={s1: .2f} cos={c1: .2f}',
             f'угол 2 = {app.slider2.value:5.1f}°',
             f'  tg ={tg2s} ctg={ctg2s}',
-            f'P₁ = {p1s}',
-            f'P₂ = {p2s}',
+            f'P1 = {p1s}',
+            f'P2 = {p2s}',
         ]
         self.panel_px(self.x + self.width - 6, self.y + self.height - 6,
                       lines, anchor='rt', size=9)
@@ -447,12 +452,14 @@ class BoardWidget(Widget):
 class TrigBattleApp(App):
     def __init__(self, **kw):
         super().__init__(**kw)
-        self.settings = {'planes': True, 'music': False,
+        self.settings = {'planes': True, 'music': False, 'hints': False,
                          'difficulty': 'Средний'}
         self.game = {'mode': 'ai', 'phase': 'place1', 'turn': 'player1',
-                     'my_moves': 0, 'enemy_moves': 0, 'last': '—'}
-        self.FL = {'units': [], 'misses': []}
-        self.FR = {'units': [], 'misses': []}
+                     'my_moves': 0, 'enemy_moves': 0, 'last': '—',
+                     'awaiting_tap': False,
+                     'streak': {'player1': 0, 'player2': 0}}
+        self.FL = {'units': [], 'misses': [], 'hints': set()}
+        self.FR = {'units': [], 'misses': [], 'hints': set()}
         self.unit_state = {'size': 3, 'dir_idx': 0, 'selected': None,
                            'last': None}
         self.mode = 'ships'          # angles / ships / planes
@@ -478,6 +485,9 @@ class TrigBattleApp(App):
         g = self.game
         if g['phase'] == 'over' or is_sunk(un):
             return True
+        # локальная игра: экран "нажмите на экран" — всё скрыто
+        if g.get('awaiting_tap') and g['phase'] == 'battle':
+            return False
         if g['mode'] == 'ai':
             return fld is self.FL
         if g['phase'] == 'place1':
@@ -596,6 +606,10 @@ class TrigBattleApp(App):
                                           self.settings['music'],
                                           lambda v: self.settings.
                                           __setitem__('music', v))
+        self.cb_hints = self._setting_row(lay, 'Включить подсказки',
+                                          self.settings['hints'],
+                                          lambda v: self.settings.
+                                          __setitem__('hints', v))
         b = Button(text='Назад', size_hint_y=None, height='55dp')
         b.bind(on_release=lambda *_: self.go('menu'))
         lay.add_widget(b)
@@ -630,7 +644,8 @@ class TrigBattleApp(App):
         root = BoxLayout(orientation='vertical', padding=4, spacing=3)
 
         self.msg = Label(text='', size_hint_y=0.055, font_size='15sp',
-                         bold=True, color=(0, 0, 0, 1))
+                         bold=True, color=(0, 0, 0, 1),
+                         font_name='DejaVuSans')
         root.add_widget(self.msg)
 
         mid = BoxLayout(size_hint_y=0.585, spacing=6)
@@ -693,7 +708,7 @@ class TrigBattleApp(App):
             b.bind(on_release=lambda _i, s=s: self.set_size(s))
             self.size_buttons.append(b)
             r3.add_widget(b)
-        self.b_rot = Button(text='⟳')
+        self.b_rot = Button(text='Поворот', font_name='DejaVuSans')
         self.b_rot.bind(on_release=lambda *_: self.rotate(1))
         self.b_del = Button(text='Удалить')
         self.b_del.bind(on_release=lambda *_: self.delete_selected())
@@ -703,12 +718,12 @@ class TrigBattleApp(App):
 
         # ряд 4: бой
         r4 = BoxLayout(spacing=3)
-        self.b_shot1 = Button(text='Огонь P₁')
-        self.b_shot2 = Button(text='Огонь P₂')
+        self.b_shot1 = Button(text='Огонь P1', font_name='DejaVuSans')
+        self.b_shot2 = Button(text='Огонь P2', font_name='DejaVuSans')
         self.b_shot1.bind(on_release=lambda *_: self.set_shot('P1'))
         self.b_shot2.bind(on_release=lambda *_: self.set_shot('P2'))
-        self.b_aim1 = Button(text='Прицел ∠1')
-        self.b_aim2 = Button(text='Прицел ∠2')
+        self.b_aim1 = Button(text='Прицел 1', font_name='DejaVuSans')
+        self.b_aim2 = Button(text='Прицел 2', font_name='DejaVuSans')
         self.b_aim1.bind(on_release=lambda *_: self.set_aim_sel(1))
         self.b_aim2.bind(on_release=lambda *_: self.set_aim_sel(2))
         self.b_move = Button(text='Совершить ход',
@@ -734,7 +749,8 @@ class TrigBattleApp(App):
         return scr
 
     def _lab(self, text, sx=None):
-        l = Label(text=text, color=(0, 0, 0, 1), font_size='13sp')
+        l = Label(text=text, color=(0, 0, 0, 1), font_size='13sp',
+                  font_name='DejaVuSans')
         if sx:
             l.size_hint_x = sx
         return l
@@ -769,11 +785,12 @@ class TrigBattleApp(App):
                      'поле', (0, 0, 0.5, 1))
 
     def reset_game(self):
-        self.FL = {'units': [], 'misses': []}
-        self.FR = {'units': [], 'misses': []}
+        self.FL = {'units': [], 'misses': [], 'hints': set()}
+        self.FR = {'units': [], 'misses': [], 'hints': set()}
         self.enemy_ai = {'tried': set(), 'hunt': [], 'thits': []}
         self.game.update(phase='place1', turn='player1', my_moves=0,
-                         enemy_moves=0, last='—')
+                         enemy_moves=0, last='—', awaiting_tap=False,
+                         streak={'player1': 0, 'player2': 0})
         self.unit_state.update(selected=None, last=None)
         self.b_start.text = 'Начать бой' if self.game['mode'] == 'ai' \
             else 'Готово (Игрок 1)'
@@ -802,6 +819,7 @@ class TrigBattleApp(App):
         self.shot_sel = p
         self.mark_toggle([self.b_shot1, self.b_shot2],
                          0 if p == 'P1' else 1, (1, 0.75, 0.4, 1))
+        self.redraw_all()
 
     def set_aim_sel(self, n):
         self.aim_sel = n
@@ -848,8 +866,15 @@ class TrigBattleApp(App):
         a2 = math.radians(self.slider2.value)
         c1, s1 = math.cos(a1), math.sin(a1)
         c2, s2 = math.cos(a2), math.sin(a2)
-        self.state['P1'] = (c1, s2 / c2 * c1) if abs(c2) > 1e-9 else None
-        self.state['P2'] = (c2 / s2 * s1, s1) if abs(s2) > 1e-9 else None
+        # точки пересечения не выходят за пределы квадрата [-1, 1]
+        if abs(c2) > 1e-9:
+            self.state['P1'] = (c1, max(-1.0, min(1.0, s2 / c2 * c1)))
+        else:
+            self.state['P1'] = None
+        if abs(s2) > 1e-9:
+            self.state['P2'] = (max(-1.0, min(1.0, c2 / s2 * s1)), s1)
+        else:
+            self.state['P2'] = None
         if self._built:
             self.boardL.redraw()
             self.boardR.redraw()
@@ -857,6 +882,17 @@ class TrigBattleApp(App):
     # ---------- касания ----------
     def board_touch(self, side, touch, phase):
         if self.sm.current != 'game':
+            return
+        g = self.game
+        # локальная игра: экран ожидания — тап следующего игрока
+        if g.get('awaiting_tap') and g['phase'] == 'battle':
+            g['awaiting_tap'] = False
+            nxt = 'ИГРОКА 1' if g['turn'] == 'player1' else 'ИГРОКА 2'
+            side_txt = 'правом' if g['turn'] == 'player1' else 'левом'
+            self.set_msg(f'ХОД {nxt} (прицел на {side_txt} поле)',
+                         (0, 0.5, 0, 1))
+            self.update_panels()
+            self.redraw_all()
             return
         dx, dy = (self.boardL if side == 'L' else self.boardR).\
             to_data(*touch.pos)
@@ -989,14 +1025,30 @@ class TrigBattleApp(App):
             res_txt = {'hit': 'ПОПАДАНИЕ!', 'sunk': 'ПОТОПЛЕН!',
                        'miss': 'МИМО'}[result]
         g['my_moves'] += 1
+
+        # подсказка: 15 промахов подряд -> раскрыть одну вражескую клетку
+        if self.settings['hints']:
+            key = 'player1' if (g['mode'] == 'ai' or
+                                g['turn'] == 'player1') else 'player2'
+            if result == 'miss':
+                g['streak'][key] += 1
+                if g['streak'][key] >= 15:
+                    g['streak'][key] = 0
+                    if self.reveal_hint(target):
+                        res_txt += ' 💡подсказка!'
+            else:
+                g['streak'][key] = 0
         g['last'] = res_txt
 
         if all_sunk(target['units']):
             g['phase'] = 'over'
+            winner = 'Игрок 1' if g['mode'] == 'ai' or shooter == 'Игрок 1' \
+                else 'Игрок 2'
             self.set_msg(f'{shooter.upper()} ПОБЕДИЛ(А)!',
                          (0, 0.5, 0, 1))
             self.update_panels()
             self.redraw_all()
+            self.show_victory(f'Победил {winner}!')
             return
 
         # ПРАВИЛО 6: попадание -> соперник пропускает ход
@@ -1021,12 +1073,35 @@ class TrigBattleApp(App):
             else:
                 g['turn'] = 'player2' if g['turn'] == 'player1' \
                     else 'player1'
-                nxt = 'ИГРОКА 1' if g['turn'] == 'player1' else 'ИГРОКА 2'
-                side = 'правом' if g['turn'] == 'player1' else 'левом'
-                self.set_msg(f'{shooter}: {res_txt}   →   ХОД {nxt} '
-                             f'(прицел на {side} поле)', (0, 0.5, 0, 1))
+                # экран ожидания: всё скрыто до тапа следующего игрока
+                g['awaiting_tap'] = True
+                n = '2' if g['turn'] == 'player2' else '1'
+                self.set_msg(f'Игрок {n} нажмите на экран',
+                             (0, 0, 0.5, 1))
             self.update_panels()
             self.redraw_all()
+
+    def reveal_hint(self, fld):
+        """Раскрыть одну случайную неподбитую клетку противника."""
+        cands = [p for un in fld['units'] for p in un['pts']
+                 if p not in un['hits']]
+        if cands:
+            fld['hints'].add(random.choice(cands))
+            return True
+        return False
+
+    def show_victory(self, text):
+        box = BoxLayout(orientation='vertical', padding=12, spacing=10)
+        box.add_widget(Label(text=text, font_size='22sp', bold=True,
+                             color=(0, 0, 0.5, 1)))
+        btn = Button(text='Показать раскладку', size_hint_y=None,
+                     height='55dp', font_name='DejaVuSans')
+        box.add_widget(btn)
+        popup = Popup(title='Игра окончена', content=box,
+                      size_hint=(0.7, 0.45), auto_dismiss=False)
+        btn.bind(on_release=lambda *_: (popup.dismiss(),
+                                        self.redraw_all()))
+        popup.open()
 
     def enemy_place(self):
         fsh, fpl = self.fleets()
@@ -1095,6 +1170,7 @@ class TrigBattleApp(App):
                          (0.7, 0, 0, 1))
             self.update_panels()
             self.redraw_all()
+            self.show_victory('Победил противник (ИИ)!')
         elif result in ('hit', 'sunk'):
             # ПРАВИЛО 6 (для ИИ): попадание -> игрок пропускает ход
             self.set_msg(f'Противник ({cell[0]:.1f}, {cell[1]:.1f}) — '
