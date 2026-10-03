@@ -39,14 +39,15 @@ jobs:
             libffi-dev libssl-dev cmake ccache
 
       - name: Cache buildozer / SDK / NDK
-        uses: actions/cache@v4
+        id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ready_apk/.buildozer
             ~/.buildozer
           # Ключ НЕ зависит от buildozer.spec: иначе смена версии или
           # requirements заставила бы заново качать SDK/NDK (~2 ГБ).
-          key: buildozer-pygame-${{ runner.os }}-v1
+          key: buildozer-pygame-${{ runner.os }}-p4a2024
           restore-keys: |
             buildozer-pygame-${{ runner.os }}-
 
@@ -87,3 +88,15 @@ jobs:
           name: trigbattle_0.2.0
           path: ready_apk/dist/trigbattle_*.apk
           if-no-files-found: error
+
+      # Сохраняем SDK/NDK даже при падении сборки: иначе каждый неудачный
+      # прогон заново качает ~2 ГБ. Сохраняем ровно под тем же ключом,
+      # который восстановили (если кэша не было — пустой ключ, пропускаем).
+      - name: Save buildozer / SDK / NDK cache
+        uses: actions/cache/save@v4
+        if: always() && steps.cache.outputs.cache-primary-key != ''
+        with:
+          path: |
+            ready_apk/.buildozer
+            ~/.buildozer
+          key: ${{ steps.cache.outputs.cache-primary-key }}

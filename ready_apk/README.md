@@ -73,7 +73,9 @@ cd /mnt/d/trig-battle/ready_apk
 |---|---|---|
 | `requirements` | `python3,pygame,sdl2_ttf,sdl2_image,sdl2_mixer` | pygame собирается из исходников и требует SDL2-модулей; версии зафиксированы по recipe pygame |
 | `p4a.bootstrap` | `sdl2` | pygame 2.x не собирается под SDL1 |
-| `p4a.branch` | `develop` | актуальные рецепты python-for-android |
+| `p4a.branch` | `v2024.01.21` | там python3 = 3.11.5; на `develop` (Python 3.14)
+pygame 2.1.0 не собирается: его C-код использует `longintrepr.h`,
+удалённый в Python 3.12+ |
 | `orientation` | `landscape` | игра рассчитана на альбомную ориентацию |
 | `android.permissions` | пусто | игре не нужны ни сеть, ни геолокация |
 | `android.archs` | `arm64-v8a, armeabi-v7a` | реальные телефоны, меньший вес и быстрее сборка |

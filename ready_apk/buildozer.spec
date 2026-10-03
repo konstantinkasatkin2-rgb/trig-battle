@@ -42,8 +42,12 @@ android.archs = arm64-v8a, armeabi-v7a
 # (bool) Automatically accept Android SDK licenses (нужно для CI)
 android.accept_sdk_license = True
 
-# (str) python-for-android branch с актуальными рецептами pygame
-p4a.branch = develop
+# (str) Ветка python-for-android.
+# ВАЖНО: нельзя ставить develop — там python3 = 3.14, а рецепт pygame
+# зафиксирован на pygame 2.1.0, чей C-код использует longintrepr.h
+# (удалён в Python 3.12+) -> падает компиляция sdl2.c.
+# В теге v2024.01.21 python3 = 3.11.5, и pygame 2.1.0 собирается нормально.
+p4a.branch = v2024.01.21
 
 # Нужен SDL2 (pygame 2.x не собирается под SDL1)
 p4a.bootstrap = sdl2
