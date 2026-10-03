@@ -4,7 +4,7 @@
 title = Тригонометрический морской бой
 
 # (str) Package name / domain
-package.name = trigbattlepg
+package.name = trigbattle
 package.domain = org.kasatkin
 
 # (str) Source code where the main.py live
@@ -14,7 +14,7 @@ source.dir = .
 source.include_exts = py,png,jpg,jpeg,ttf,otf,json
 
 # (str) Application versioning
-version = 0.1.0
+version = 0.2.0
 
 # (list) Application requirements.
 # pygame собирается python-for-android из исходников и требует SDL2-модулей.

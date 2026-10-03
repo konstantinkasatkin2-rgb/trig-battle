@@ -37,7 +37,8 @@ NDK (~2 ГБ). Первая сборка занимает 30–60 минут, п
    **Run workflow**.
 3. Дождитесь окончания (в первый раз ~40–70 минут: качаются SDK/NDK и
    собирается pygame из исходников).
-4. Скачайте артефакт **trig-battle-pygame-apk** — внутри лежит `*.apk`.
+4. Скачайте артефакт **trigbattle_0.2.0** — внутри лежит готовый
+   `trigbattle_0.2.0.apk`.
 5. Перекиньте APK на телефон и установите (нужно разрешить установку из
    неизвестных источников).
 
@@ -58,7 +59,9 @@ python3 -m pip install --user buildozer cython
 cd /mnt/d/trig-battle/ready_apk
 ./build_apk.sh
 ```
-APK появится в `ready_apk/bin/`. Установка: `adb install -r bin/*.apk`.
+Скрипт сам переименует результат: `ready_apk/dist/trigbattle_0.2.0.apk`
+(buildozer по умолчанию даёт `trigbattle-0.2.0-arm64-v8a_armeabi-v7a-debug.apk`).
+Установка: `adb install -r dist/trigbattle_0.2.0.apk`
 
 > Сборка только под ARM (`arm64-v8a`, `armeabi-v7a`) — APK получается
 > заметно меньше и собирается быстрее. Если нужен x86_эмулятор, уберите
@@ -74,6 +77,7 @@ APK появится в `ready_apk/bin/`. Установка: `adb install -r bi
 | `orientation` | `landscape` | игра рассчитана на альбомную ориентацию |
 | `android.permissions` | пусто | игре не нужны ни сеть, ни геолокация |
 | `android.archs` | `arm64-v8a, armeabi-v7a` | реальные телефоны, меньший вес и быстрее сборка |
+| `version` / `package.name` | `0.2.0` / `trigbattle` | итоговый файл `trigbattle_0.2.0.apk` |
 | `android.accept_sdk_license` | `True` | нужно для CI |
 
 ## Проверка до сборки

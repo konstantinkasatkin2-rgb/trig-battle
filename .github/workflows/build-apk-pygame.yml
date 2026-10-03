@@ -44,7 +44,9 @@ jobs:
           path: |
             ready_apk/.buildozer
             ~/.buildozer
-          key: buildozer-pygame-${{ runner.os }}-${{ hashFiles('ready_apk/buildozer.spec') }}
+          # Ключ НЕ зависит от buildozer.spec: иначе смена версии или
+          # requirements заставила бы заново качать SDK/NDK (~2 ГБ).
+          key: buildozer-pygame-${{ runner.os }}-v1
           restore-keys: |
             buildozer-pygame-${{ runner.os }}-
 
@@ -63,9 +65,25 @@ jobs:
         working-directory: ready_apk
         run: buildozer android debug
 
+      # buildozer называет файл package-version-arch-debug.apk.
+      # Собираем из него один файл с понятным именем: <package>_<version>.apk
+      - name: Prepare artifact (trigbattle_0.2.0.apk)
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          NAME=$(grep -E '^package\.name' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          VER=$(grep -E '^version' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          mkdir -p dist
+          shopt -s nullglob
+          apks=(bin/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then echo "APK не собран!"; exit 1; fi
+          cp "${apks[0]}" "dist/${NAME}_${VER}.apk"
+          echo "Итоговый файл: dist/${NAME}_${VER}.apk"
+          ls -lh dist
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: trig-battle-pygame-apk
-          path: ready_apk/bin/*.apk
+          name: trigbattle_0.2.0
+          path: ready_apk/dist/trigbattle_*.apk
           if-no-files-found: error
