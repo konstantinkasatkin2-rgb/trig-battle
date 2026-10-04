@@ -157,6 +157,12 @@ jobs:
         working-directory: ready_apk
         run: python tools/test_sync_game_files.py
 
+      # Новый режим (машинки против препятствий): правила, ходы,
+      # ИИ, туториал и игра по сети.
+      - name: "Sanity check (новый режим: машинки и препятствия)"
+        working-directory: ready_apk
+        run: python tools/test_cars.py
+
       # Игра альбомная: в книжном окне она раньше падала. Проверяем, что
       # холст всегда альбомный, касания пересчитываются, а разбор
       # кнопок переживает узкий экран.

@@ -16,6 +16,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 GAME = os.path.join(ROOT, 'trig_battle_pygame.py')
 TEST = os.path.join(ROOT, 'ready_apk', 'tools', 'test_netgame.py')
+CARS = os.path.join(ROOT, 'ready_apk', 'tools', 'test_cars.py')
+CARS = os.path.join(ROOT, 'ready_apk', 'tools', 'test_cars.py')
 PORTRAIT = os.path.join(ROOT, 'ready_apk', 'tools', 'test_portrait.py')
 
 # (что ломаем, что проверка обязана заметить)
@@ -57,16 +59,45 @@ CASES = [
      "        return pos",
      'вне холста'),
     ('убираем защиту разбора кнопок',
-     "        btns = list(btns) + [None] * (8 - len(btns))",
+     "        btns = list(btns) + [None] * (9 - len(btns))",
      "        btns = list(btns)[:8]",
-     'падение'),
+     'ValueError'),
+    ('машинку разрешаем внутри окружности',
+     "            if kind == 'car' and self.car_dist(p) < 1 - 1e-9:",
+     '            if False:',
+     'машинку можно поставить внутри окружности'),
+    ('разрешаем закрыть жёлтый круг',
+     "            if kind == 'wall' and self.car_dist(p) < YELLOW_R - 1e-9:",
+     '            if False:',
+     'жёлтый круг можно закрыть'),
+    ('машинка не разворачивается при таране',
+     '            self.car_reverse(un)\n            self.car_break_wall(*hit)',
+     '            self.car_break_wall(*hit)',
+     'машинка не развернулась'),
+    ('препятствие не теряет клетку от тарана',
+     '            self.car_break_wall(*hit)',
+     '            pass',
+     'препятствие не пострадало'),
+    ('машинка едет на две клетки',
+     '        return dx * GRID, dy * GRID',
+     '        return dx * GRID * 2, dy * GRID * 2',
+     'прямой ход неверный'),
+    ('касание жёлтого круга не приносит победу',
+     '        if self.car_hit_yellow(nxt):',
+     '        if False:',
+     'партия не закончилась'),
+    ('запас ходов не тратится',
+     "        un['left'] = max(0, int(un.get('left', CAR_STEPS)) - 1)",
+     '        pass',
+     'ходы не тратятся'),
+
 ]
 
 
 def run_test():
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
     out = ''
-    for test in (TEST, PORTRAIT):
+    for test in (TEST, PORTRAIT, CARS):
         p = subprocess.run([sys.executable, test], cwd=ROOT, env=env,
                            capture_output=True, text=True, encoding='utf-8',
                            errors='replace')
