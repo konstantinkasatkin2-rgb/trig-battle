@@ -159,13 +159,13 @@ jobs:
           spec_get() { grep -E "^$1[[:space:]]*=" buildozer.spec | head -1 | cut -d= -f2- | tr -d " "; }
           KEYSTORE="$PWD/$(spec_get android.keystore)"
           if [ ! -f "$KEYSTORE" ]; then echo "НЕТ файла ключа: $KEYSTORE"; exit 1; fi
-          {
-            echo "P4A_RELEASE_KEYSTORE=$KEYSTORE"
-            echo "P4A_RELEASE_KEYSTORE_PASSWD=$(spec_get android.storepassword)"
-            echo "P4A_RELEASE_KEYALIAS=$(spec_get android.keyalias)"
-            echo "P4A_RELEASE_KEYALIAS_PASSWD=$(spec_get android.keypassword)"
-          } >> "$GITHUB_ENV"
-          echo "ключ подписи: $KEYSTORE"
+          # export, а не GITHUB_ENV: переменные из GITHUB_ENV попадают
+          # только в СЛЕДУЮЩИЕ шаги, а buildozer здесь же
+          export P4A_RELEASE_KEYSTORE="$KEYSTORE"
+          export P4A_RELEASE_KEYSTORE_PASSWD="$(spec_get android.storepassword)"
+          export P4A_RELEASE_KEYALIAS="$(spec_get android.keyalias)"
+          export P4A_RELEASE_KEYALIAS_PASSWD="$(spec_get android.keypassword)"
+          echo "ключ подписи: $KEYSTORE, alias: $P4A_RELEASE_KEYALIAS"
           buildozer android release
 
       # buildozer называет файл package-version-arch-debug.apk.
@@ -209,34 +209,13 @@ jobs:
       # Статус прогона при этом остаётся failed — красный.
       # Ключ подписи не должен меняться: иначе Android требует сначала
       # удалить старую версию, а Google Play считает приложение
-      # подозрительным. Сверяем блок подписи из самого APK — так не нужен
-      # apksigner и не зависит от версии SDK.
+      # подозрительным. Логика вынесена в отдельный скрипт, её можно
+      # прогнать локально на любом APK.
       - name: Check signing certificate
         working-directory: ready_apk
         run: |
           set -euo pipefail
-          APK=$(ls -1 dist/*.apk | head -1)
-          echo "APK: $APK"
-          SIG=$(unzip -Z1 "$APK" | grep -E '^META-INF/.*\.(RSA|DSA|EC)$' | head -1)
-          if [ -z "$SIG" ]; then
-            echo "ОШИБКА: в APK нет блока подписи — он не подписан?"
-            exit 1
-          fi
-          echo "блок подписи: $SIG"
-          CERT=$(unzip -p "$APK" "$SIG" | sha256sum | cut -d' ' -f1)
-          echo "хеш сертификата: $CERT"
-          if [ ! -f expected_cert.txt ]; then
-            echo "$CERT" > expected_cert.txt
-            echo "сохранён в expected_cert.txt; следующие сборки обязаны"
-            echo "им подписываться, иначе обновление поверх старой версии"
-            echo "перестанет работать"
-          elif ! grep -qF "$CERT" expected_cert.txt; then
-            echo "ОШИБКА: APK подписан другим ключом, чем предыдущие сборки"
-            echo "пользователь не сможет обновиться поверх старой версии"
-            exit 1
-          else
-            echo "подпись совпадает с предыдущими сборками"
-          fi
+          bash "$GITHUB_WORKSPACE/.github/scripts/check_signing.sh" dist/*.apk
 
       - name: Upload APK
         if: always()
