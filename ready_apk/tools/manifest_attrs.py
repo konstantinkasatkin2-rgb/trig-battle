@@ -87,8 +87,17 @@ def attributes(data, start, pool):
 
 
 def main():
-    apk = sys.argv[1] if len(sys.argv) > 1 else \
-        'ready_apk/bin/trigbattle_0.2.3.apk'
+    if len(sys.argv) > 1:
+        apk = sys.argv[1]
+    else:
+        # версия в имени меняется от сборки к сборке, поэтому берём
+        # первый APK из bin/, а не зашитое имя
+        import glob
+        found = sorted(glob.glob('ready_apk/bin/*.apk'))
+        if not found:
+            print('Нет APK в ready_apk/bin')
+            return 1
+        apk = found[0]
     data = zipfile.ZipFile(apk).read('AndroidManifest.xml')
     pool = []
     pos = 8                                  # заголовок файла
