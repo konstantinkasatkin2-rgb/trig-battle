@@ -45,6 +45,11 @@ DEFAULT_UDP_PORT = 38384
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 CODE_LENGTH = 5
 
+# Номер версии протокола. При несовпадении версий у соперника игра
+# предупреждает, а не падает. Повышается при несовместимых изменениях
+# формата сообщений.
+PROTOCOL_VERSION = 2
+
 BEACON_PREFIX = 'TB1'
 CONNECT_TIMEOUT = 6.0
 SEND_TIMEOUT = 4.0
@@ -247,7 +252,8 @@ class HostServer(_Peer):
         self.peer_addr = addr
         self.connected = True
         self.start_receiving()
-        self.send({'t': 'hello', 'nick': self.nick, 'code': self.code})
+        self.send({'t': 'hello', 'nick': self.nick,
+                    'proto': PROTOCOL_VERSION, 'code': self.code})
         # Прекращаем маячок: соперник нашёлся, дальше играем по TCP.
         self._beacon_stop.set()
         return True
@@ -292,7 +298,8 @@ class Client(_Peer):
         self.status = 'ready'
         self.status_text = 'Соединение установлено'
         self.start_receiving()
-        self.send({'t': 'hello', 'nick': self.nick})
+        self.send({'t': 'hello', 'nick': self.nick,
+                    'proto': PROTOCOL_VERSION})
         return True
 
     def search_code(self, code, udp_port=DEFAULT_UDP_PORT):
@@ -360,7 +367,8 @@ class Client(_Peer):
             self.status = 'ready'
             self.status_text = 'Соединение с %s' % host_ip
             self.start_receiving()
-            self.send({'t': 'hello', 'nick': self.nick})
+            self.send({'t': 'hello', 'nick': self.nick,
+                       'proto': PROTOCOL_VERSION})
             return
         if self.status == 'searching':
             self.status_text = 'Хост с кодом %s не найден. Проверьте, что ' \
@@ -403,28 +411,48 @@ def encode_fleet(units):
 
 
 def decode_fleet(payload):
-    """Обратное преобразование.
+    """Обратное преобразование флота.
 
-    Возвращает готовые юниты; поле `fld` проставляет принимающая сторона
-    (указатель на её собственное поле соперника).
+    Понимает ОБА формата:
+      * новый  — [тип, размер, направление, [[x, y], ...]];
+      * старый  — [[x, y], ...] (версия 0.2.3 до исправления KeyError).
+
+    Любые негодные элементы пропускаются, а не поднимают исключение:
+    сетевой слой не имеет права ронять приложение из-за чужих данных.
     """
     units = []
     for item in payload or []:
         try:
-            utype, size, dir_idx, pts = item
+            utype, size, dir_idx, raw_pts = _unpack_unit(item)
         except (TypeError, ValueError):
             continue
-        points = [(float(p[0]), float(p[1])) for p in pts]
+        points = []
+        for p in raw_pts or []:
+            try:
+                x, y = float(p[0]), float(p[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            points.append((round(x, 6), round(y, 6)))
         if not points:
             continue
-        units.append({'type': str(utype),
-                      'size': int(size) or len(points),
+        units.append({'type': utype,
+                      'size': max(1, int(size) or len(points)),
                       'dir': int(dir_idx),
                       'pts': points,
                       'hits': set(),
                       'visible': True,
                       'fld': None})
     return units
+
+
+def _unpack_unit(item):
+    """-> (тип, размер, направление, точки) для обоих форматов."""
+    # новый формат: [str, int, int, [[x, y], ...]]
+    if (len(item) == 4 and isinstance(item[0], str)
+            and isinstance(item[3], (list, tuple))):
+        return item[0], item[1], item[2], item[3]
+    # старый формат: [[x, y], ...]
+    return 'ship', len(item), 0, item
 
 
 if __name__ == '__main__':

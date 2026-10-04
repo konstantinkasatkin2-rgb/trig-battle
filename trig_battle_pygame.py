@@ -2894,7 +2894,13 @@ class TrigBattle:
         self.show_screen('net_join')
         self.set_msg('Ищу соперника с кодом %s...' % code, NAVY)
 
-    def net_start_client_ip(self):
+    def net_start_client_ip(self, port=None):
+        """Подключение по IP.
+
+        Порт по умолчанию читается в момент вызова, а не при определении
+        функции: иначе его нельзя переопределить, а для проверок и
+        нестандартных сетей порт задавать нужно.
+        """
         ip = (self.form['ip'] or '').strip()
         if not ip:
             self.set_msg('Введите IP-адрес соперника', DKRED)
@@ -2902,15 +2908,19 @@ class TrigBattle:
         self.net_close()
         try:
             cli = netgame.Client(self.my_nick())
-            cli.connect_ip(ip)
+            cli.connect_ip(ip, port or netgame.DEFAULT_TCP_PORT)
         except Exception as e:                # noqa: BLE001
             self.set_msg(str(e), DKRED)
             return
         self.net = cli
         self.net_role = 'client'
-        self.net_state = 'connected'
-        self.show_screen('net_join')
-        self.set_msg('Подключение к %s установлено' % ip, DGREEN)
+        # остаёмся в waiting: переход к расстановке делает _net_poll,
+        # и если выставить connected здесь, он не сработает и клиент
+        # останется на экране ввода кода
+        self.net_state = 'waiting'
+        self.show_screen('net_ip')
+        self.set_msg('Подключение к %s установлено, ждём соперника...'
+                     % ip, DGREEN)
 
     def net_begin_placement(self):
         """Соединение есть: начинаем расставлять свой флот.
@@ -2961,7 +2971,16 @@ class TrigBattle:
             self.net_begin_placement()
 
         for msg in self.net.poll():
-            self._net_handle(msg)
+            # чужие или испорченные данные не должны убивать игру: на
+            # устройстве с другой версией протокола формат может отличаться
+            try:
+                self._net_handle(msg)
+            except Exception as e:            # noqa: BLE001
+                print('[trigbattle] не понял сообщение %r: %s'
+                      % (msg.get('t'), e), flush=True)
+                self.set_msg('Сообщение от соперника не распознано, '
+                             'пропущено. Возможно, у вас разные версии '
+                             'игры.', DKRED)
 
     def _net_handle(self, msg):
         kind = msg.get('t')
@@ -2969,7 +2988,13 @@ class TrigBattle:
             nick = str(msg.get('nick') or 'Соперник')[:16]
             self.net_peer_nick = nick
             self.FR['name'] = nick
-            self.set_msg('Соперник: %s' % nick, DGREEN)
+            peer_proto = msg.get('proto')
+            if isinstance(peer_proto, int) and                     peer_proto != netgame.PROTOCOL_VERSION:
+                self.set_msg('Соперник: %s. ВНИМАНИЕ: версии игры '
+                             'различаются, игра может идти неправильно — '
+                             'обновите оба устройства.' % nick, DKRED)
+            else:
+                self.set_msg('Соперник: %s' % nick, DGREEN)
         elif kind == 'angles':
             # углы общие: отсюда обе формулы выстрела считаются одинаково
             self.sliders[0].set(msg.get('a1', self.s1), exact=True)
@@ -3082,7 +3107,11 @@ class TrigBattle:
         """Выстрел соперника по нашему флоту."""
         if self.game['phase'] != 'battle':
             return
-        px, py = msg.get('x', 0.0), msg.get('y', 0.0)
+        try:
+            px = float(msg.get('x', 0.0))
+            py = float(msg.get('y', 0.0))
+        except (TypeError, ValueError):
+            return                       # битые координаты — просто игнор
         result = 'miss'
         if abs(px) <= 1 and abs(py) <= 1:
             result = self.fire_at(self.FL, px, py)

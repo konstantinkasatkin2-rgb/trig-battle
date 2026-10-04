@@ -65,6 +65,7 @@ def main():
 
     # порты, отдельные от основных, чтобы не мешать живому запуску
     tcp_port, udp_port = 39301, 39302
+    IP_PORT = 39311
     netgame.DEFAULT_TCP_PORT = tcp_port
     netgame.DEFAULT_UDP_PORT = udp_port
 
@@ -233,6 +234,73 @@ def main():
     check(cli.game['phase'] == 'over',
           'клиент тоже увидел конец партии',
           'клиент не знает о конце (phase=%s)' % cli.game['phase'])
+
+    # --- 7. Устойчивость: чужие и испорченные данные не роняют игру.
+    #     Именно из-за этого на устройстве с прежней версией было
+    #     «could not convert string to float: 's'».
+    print(' проверка устойчивости к чужим данным')
+    try:
+        host._net_handle({'t': 'hello', 'nick': 'Старый'})
+        host._net_handle({'t': 'ready',
+                          'units': [[[0.1, 0.2], [0.2, 0.2], [0.3, 0.2]]]})
+        host.draw()
+        check(True, 'принят флот в старом формате (совместимость версий)',
+              '')
+    except Exception as e:                                # noqa: BLE001
+        check(False, '', 'старый формат флота ломает игру: %r' % (e,))
+
+    for bad in (None, [], 'мусор', [None, {}, ['ship']], [{'x': 1}]):
+        try:
+            host._net_handle({'t': 'ready', 'units': bad})
+            host.draw()
+        except Exception as e:                            # noqa: BLE001
+            check(False, '', 'испорченный флот %r ломает игру: %r'
+                  % (str(bad)[:16], e))
+    check(True, 'испорченный флот игнорируется без падения', '')
+
+    for coords in ({'x': 's', 'y': 'q'}, {'x': None, 'y': None}, {}):
+        try:
+            host._net_handle({'t': 'shot', **coords})
+            host.draw()
+        except Exception as e:                            # noqa: BLE001
+            check(False, '', 'битые координаты %r ломают игру: %r'
+                  % (str(coords)[:16], e))
+    check(True, 'битые координаты выстрела игнорируются', '')
+
+    # --- 8. Подключение по IP: клиент обязан дойти до расстановки,
+    #     а не остаться на экране ввода кода.
+    print(' проверка подключения по IP')
+    host2 = g.TrigBattle()
+    cli2 = g.TrigBattle()
+    host2.net = netgame.HostServer('Хост', tcp_port=IP_PORT,
+                                   udp_port=IP_PORT + 1)
+    host2.net_role = 'host'
+    host2.net_code = host2.net.code
+    host2.net_state = 'waiting'
+    cli2.show_screen('net_ip')
+    cli2.form['ip'] = '127.0.0.1'
+    cli2.net_start_client_ip(port=IP_PORT)
+    check(cli2.net_state == 'waiting',
+          'после соединения состояние waiting (иначе пропустим переход)',
+          'состояние %s — переход в игру не сработает' % cli2.net_state)
+    for _ in range(150):
+        host2._net_poll()
+        cli2._net_poll()
+        host2.draw()
+        cli2.draw()
+        if cli2.screen_name == 'game' and host2.screen_name == 'game':
+            break
+        time.sleep(0.02)
+    check(cli2.screen_name == 'game',
+          'клиент по IP дошёл до расстановки (был экран %s)' % cli2.screen_name,
+          'клиент остался на экране %s' % cli2.screen_name)
+    check(host2.screen_name == 'game', 'хост тоже перешёл в игру',
+          'хост остался на %s' % host2.screen_name)
+    check(cli2._net_my_turn() != host2._net_my_turn(),
+          'стороны назначены верно (хост и клиент играют за разные)',
+          'оба играют за одну сторону')
+    host2.net.close()
+    cli2.net.close()
 
     host.net.close()
     cli.net.close()
