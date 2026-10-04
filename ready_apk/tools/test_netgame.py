@@ -192,16 +192,18 @@ def main():
         host.update_angles()
         host.state['P1'] = cell
         host._net_fire()
-        for _ in range(120):
+        # ждём конца у ОБЕИХ сторон: ход заканчивается по разному
+        for _ in range(150):
             cli._net_poll()
             host._net_poll()
-            if host.game['phase'] == 'over':
+            if host.game['phase'] == 'over' and cli.game['phase'] == 'over':
                 break
             time.sleep(0.02)
     check(host.game['phase'] == 'over',
           'партия завершена победой хоста', 'партия не завершилась')
     check(cli.game['phase'] == 'over',
-          'клиент тоже увидел конец партии', 'клиент не знает о конце')
+          'клиент тоже увидел конец партии',
+          'клиент не знает о конце (phase=%s)' % cli.game['phase'])
 
     host.net.close()
     cli.net.close()

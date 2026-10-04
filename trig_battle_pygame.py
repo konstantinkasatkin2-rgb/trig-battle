@@ -2970,6 +2970,9 @@ class TrigBattle:
             self.net_state = 'idle'
             if self.game['phase'] != 'over':
                 self.show_screen('net')
+        elif kind == 'over':
+            if self.game['phase'] != 'over':
+                self._net_lose()
         elif kind == 'bye':
             self.net_close()
             self.show_screen('net')
@@ -3076,14 +3079,22 @@ class TrigBattle:
             self.set_msg('%s Ваш корабль поражён!' % res_txt, DKRED)
 
     def _net_win(self):
+        if self.game['phase'] == 'over':
+            return
         self.game['phase'] = 'over'
         self.net_state = 'over'
         won = True
+        # сообщаем сопернику явно: он и сам обнаружит потопление по
+        # своему флоту, но полагаться на порядок сообщений не нужно
+        if self.net is not None:
+            self.net.send({'t': 'over', 'winner': 'me'})
         self.set_msg('ПОБЕДА! Флот соперника уничтожен.', DGREEN)
         self.show_victory('Победил %s!' % self.my_nick())
         self._net_save_stats(won)
 
     def _net_lose(self):
+        if self.game['phase'] == 'over':
+            return
         self.game['phase'] = 'over'
         self.net_state = 'over'
         won = False
