@@ -35,11 +35,16 @@ ENTRY_MODULE = os.path.join('ready_apk', 'main.py')
 
 
 def sha256(path):
-    h = hashlib.sha256()
+    """Контрольная сумма файла.
+
+    Переводы строк нормализуются: в git файл хранится с LF, а рабочая
+    копия на Windows — с CRLF. Без нормализации одна и та же правка даёт
+    разные хеши на разных машинах, и проверка врёт в обе стороны.
+    """
     with open(path, 'rb') as fd:
-        for chunk in iter(lambda: fd.read(65536), b''):
-            h.update(chunk)
-    return h.hexdigest()
+        raw = fd.read()
+    raw = raw.replace(b'\r\n', b'\n')
+    return hashlib.sha256(raw).hexdigest()
 
 
 def manifest_text():

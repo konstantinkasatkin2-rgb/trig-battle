@@ -42,7 +42,11 @@ def local_manifest():
                           os.path.join(root, 'ready_apk', name)):
             if os.path.exists(candidate):
                 with open(candidate, 'rb') as fd:
-                    out[name] = hashlib.sha256(fd.read()).hexdigest()
+                    # CRLF -> LF: в git файл хранится с LF, на Windows в
+                    # рабочей копии CRLF. Без нормализации проверка ругается
+                    # на нормальный APK.
+                    raw = fd.read().replace(b'\r\n', b'\n')
+                    out[name] = hashlib.sha256(raw).hexdigest()
                 break
     return out
 

@@ -132,8 +132,12 @@ class TrigbattleSrcRecipe(Recipe):
         for module in (ENTRY_MODULE,) + GAME_MODULES:
             src = self.find_module(module)
             with open(src, 'rb') as fd:
-                rows.append('%s %s' % (module, hashlib.sha256(
-                    fd.read()).hexdigest()))
+                # переводы строк нормализуем: в git файл с LF, на
+                # Windows в рабочей копии CRLF, и без этого хеши
+                # расходятся между машинами
+                raw = fd.read().replace(b'\r\n', b'\n')
+                rows.append('%s %s' % (module,
+                                       hashlib.sha256(raw).hexdigest()))
         with open(manifest, 'w', encoding='utf-8') as fd:
             fd.write('\n'.join(rows) + '\n')
         info('trigbattle_src: {} записан'.format(MANIFEST_NAME))
