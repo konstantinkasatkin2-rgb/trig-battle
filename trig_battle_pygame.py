@@ -116,10 +116,10 @@ YELLOW_R = 0.2                  # жёлтый круг: координаты [-
 FLEET_CARS = {1: 4}             # 4 машинки (одна на 5 клеток препятствий)
 FLEET_WALLS = {1: 4, 2: 3, 3: 2, 4: 1}      # 1:4, 2:3, 3:2, 4:1
 CAR_MAX_LEN = 4                 # длина препятствия не больше 4
-CAR_R = 0.105                  # радиус машинки в долях ширины поля.
-# Прежний был 0.042 — машинку почти не было видно, по просьбе игрока
-# увеличили в 2.5 раза. Ход при этом ровно на клетку, поэтому ход
-# показывается плавно (CAR_ANIM_MS), иначе движение незаметно.
+CAR_R = 0.015                  # радиус машинки в долях ширины поля.
+# По требованию игрока машинка размером примерно в одну клетку:
+# клетка — это GRID = 0.1 в координатах поля, то есть 0.015 от ширины
+# поля в пикселях (0.5 клетки в радиусе, клетка в диаметре).
 CAR_STEPS = 40                  # запас ходов у машинки
 CAR_ANIM_MS = 260               # на сколько миллисекунд показываем ход:
 # машинка крупная, а шаг — ровно клетка, поэтому без плавного
@@ -1399,6 +1399,13 @@ class TrigBattle:
 
     def unit_visible(self, un, fld):
         """Классические правила скрытия: чужие юниты не видны (кроме потопленных)."""
+        if self.car_mode():
+            # в новом режиме своих фигур видно всегда, а чужие
+            # проявляются только после столкновения (см. car_seen)
+            return (self.car_owner(un) ==
+                    self.car_side_of_fld(fld) or
+                    bool(un.get('revealed')) or
+                    self.game['phase'] == 'over')
         if self.game['phase'] == 'over' or self.is_sunk(un):
             return True
         if self.game.get('awaiting_tap') and self.game['phase'] == 'battle':
@@ -1572,14 +1579,14 @@ class TrigBattle:
     # =========================================================
     def build_fld(self):
         """Поле, на котором сейчас идёт стройка."""
+        if self.car_mode():
+            # расстановка одна: свои машинки ставим на поле СОПЕРНИКА
+            return (self.car_foe_fld()
+                    if self.game['phase'] == 'place' else None)
         if self.game['phase'] == 'place1':
-            if self.car_mode():
-                # в новом режиме сначала ставят машинки — но поле
-                # зависит от того, чья это сторона на этом экране
-                return self.car_field('car')
             return self.FL
         if self.game['phase'] == 'place2':
-            return self.car_field('wall') if self.car_mode() else self.FR
+            return self.FR
         return None
 
     def target_fld(self):
@@ -1946,11 +1953,19 @@ class TrigBattle:
         self.enemy_ai['tried'].clear()
         self.enemy_ai['hunt'].clear()
         self.enemy_ai['thits'].clear()
-        self.game.update(phase='place1', turn='player1', my_moves=0,
+        phase = 'place' if self.car_mode() else 'place1'
+        turn = 'player1'
+        if self.car_mode() and self.play_mode() == 'ai':
+            turn = getattr(self, 'car_human', 'player1')
+        self.game.update(phase=phase, turn=turn, my_moves=0,
                          enemy_moves=0, last='—', awaiting_tap=False,
                          streak={'player1': 0, 'player2': 0})
         self.unit_state.update(selected=None, last=None)
-        if self.game['mode'] == 'ai':
+        if self.car_mode():
+            # в новом режиме расстановка одна: свои машинки на поле
+            # соперника, дальше бой
+            self.btn_start.label = 'Готово'
+        elif self.game['mode'] == 'ai':
             self.btn_start.label = 'Начать бой'
         elif self.game['mode'] == 'net':
             self.btn_start.label = 'Готово'
@@ -2277,39 +2292,63 @@ class TrigBattle:
         return 'player1' if fld is self.FL else 'player2'
 
     def car_tap(self, side, dx, dy, btn=1):
-        """Тап по полю во время боя.
+        """Тап по полю в новом режиме.
 
-        Фигура на клетке — выбираем её (свою), пустая клетка — ставим
-        стену. Правило стройки в бою: стену можно поставить только в
-        СВОЙ ход, и только одну за ход — ход после этого уходит
-        сопернику, как и после обычного хода фигурой.
+        Расстановка (фаза 'place'): ставим СВОИ машинки на поле
+        СОПЕРНИКА — там, куда мы собираемся ехать.
+
+        Бой: тап по своей фигуре выбирает её, тап по пустой клетке
+        СВОЕГО поля ставит стену. Стены до боя ставить нельзя, за ход
+        ставится ровно одна, и только в свой ход.
         """
         fld = self.FL if side == 'L' else self.FR
         hit = self.unit_at(fld['units'], dx, dy)
-        if btn == 3:
-            if hit is not None and self.car_can_build(fld):
-                self.remove_unit(hit)
-                self.set_msg('Фигура убрана', NAVY)
-            return
-        if hit is not None:
-            if self.car_can_build(fld):
-                self.select(hit)
-            else:
-                self.deselect()
-                self.set_msg('Это поле соперника — здесь не строим', DKRED)
-            return
-        self.deselect()
-        if not self.car_can_build(fld):
-            self.set_msg('Строим только на своей стороне поля', DKRED)
-            return
+        placing = self.game['phase'] == 'place'
         mine = self.car_my_side()
         your_turn = (self.game['turn'] == mine if mine is not None else
-                     self.game['turn'] == self.car_side_of_fld(fld))
-        if not your_turn:
-            self.set_msg('Препятствия ставятся в свой ход, и только одна '
-                         'за ход (сейчас ход соперника)', DKRED)
+                     self.game['turn'] == self.car_owner(hit)
+                     if hit is not None else True)
+
+        if hit is not None:
+            if btn == 3 and not placing and self.car_owner(hit) == \
+                    (mine or self.car_side_of_fld(fld)):
+                self.remove_unit(hit)
+                self.set_msg('Фигура убрана', NAVY)
+                return
+            self.select(hit)
             return
+
+        self.deselect()
         gx, gy = self.snap(dx), self.snap(dy)
+
+        # --- расстановка: только машинки, только на поле соперника
+        if placing:
+            if fld is not self.car_foe_fld():
+                self.set_msg('Машинки ставятся на поле СОПЕРНИКА: '
+                             'вот здесь — его сторона', DKRED)
+                return
+            pts = self.unit_points(gx, gy, 1, self.unit_state['dir_idx'])
+            if not self.can_place(fld, 'car', pts):
+                self.set_msg('Здесь машинка не встанет: нужно свободное '
+                             'место ЗА пределами окружности, внутри '
+                             'квадрата', DKRED)
+                return
+            self.place_unit(fld, pts, self.unit_state['dir_idx'], 1, 'car')
+            fld['units'][-1]['left'] = CAR_STEPS
+            self.unit_state['last'] = (gx, gy)
+            self.cars_tutorial_hit('place')
+            self.cars_after_change()
+            return
+
+        # --- бой: стена на своём поле, одна за ход
+        if fld is not self.car_my_fld():
+            self.set_msg('Стены строятся только на своём поле: тут мы '
+                         'защищаем жёлтый круг', DKRED)
+            return
+        if not your_turn:
+            self.set_msg('Стены ставятся в свой ход, и только одна за ход '
+                         '(сейчас ход соперника)', DKRED)
+            return
         size = self.place_size('wall')
         d = self.unit_state['dir_idx']
         pts = self.unit_points(gx, gy, size, d)
@@ -2322,90 +2361,84 @@ class TrigBattle:
         if self.net is not None and self.play_mode() == 'net':
             self.car_send_build(fld['units'][-1])
         self.game['last'] = 'Поставлено препятствие'
-        self.set_msg('Стена поставлена (одна за ход, ход переходит '
-                     'сопернику)', DGREEN)
+        self.set_msg('Стена поставлена: за ход ставится одна стена, ход '
+                     'переходит сопернику', DGREEN)
         self.cars_tutorial_hit('wall')
         self.cars_after_change()
-        # ход тратится: дальше играет соперник
+        self.car_next_turn()
+
+    def car_next_turn(self):
+        """Ход закончен: переходим к другому игроку."""
         self.game['turn'] = ('player2' if self.game['turn'] == 'player1'
                              else 'player1')
         self.cars_turn_feedback()
 
     # =========================================================
     def car_advance(self):
-        """«Готово» в новом режиме: следующая фаза или начало боя.
+        """«Готово» в новом режиме.
 
-        Машинки всегда ставятся первыми, защита — второй. По сети флоты
-        уходят в два этапа: сперва машинки, потом препятствия, и бой
-        начинается, когда оба этапа получены обеими сторонами.
+        Расстановка одна: свои машинки на поле соперника. Потом бою,
+        в котором каждый игрок в свой ход либо двигает свою фигуру,
+        либо ставит одну стену на своём поле.
         """
-        if self.game['phase'] == 'place1':
-            fld = self.car_field('car')
-            if not fld['units']:
-                if self.play_mode() == 'net' and not self.car_local_cars():
-                    # машинки ставит соперник: свою сторону начинаем сразу
-                    self.game['phase'] = 'place2'
-                    self.btn_start.label = 'Готово'
-                    self.deselect()
-                    self.unit_state['size'] = 2
-                    self.set_msg('Расставьте ПРЕПЯТСТВИЯ на ЛЕВОМ полю '
-                                 'и нажмите «Готово»', NAVY)
-                    return
-                self.set_msg('Поставьте хотя бы одну машинку!', DKRED)
-                return
-            self.game['phase'] = 'place2'
-            self.btn_start.label = 'Начать бой'
-            self.deselect()
-            self.unit_state['size'] = 2
-            if self.play_mode() == 'ai' and not self._car_human_is_cars():
-                # защитника играет компьютер — расставляем сразу
-                self.car_auto_place(self.car_field('wall'), 'wall')
-                self.deselect()
-                self.game['phase'] = 'battle'
-                self.btn_start.label = 'Бой идёт'
-                self.cars_begin()
-                return
-            if self.play_mode() == 'net':
-                # первый этап: флот машинок
-                self.net_send_ready(stage=1)
-            self.set_msg('Теперь расставьте ПРЕПЯТСТВИЯ (чёрные '
-                         'квадраты, длина до 4). Жёлтый круг закрывать '
-                         'нельзя!', NAVY)
+        if self.game['phase'] != 'place':
             return
-        if self.game['phase'] == 'place2':
-            fld = self.car_field('wall')
-            if not fld['units']:
-                self.set_msg('Поставьте хотя бы одно препятствие!', DKRED)
-                return
-            if self.play_mode() == 'net':
-                # второй этап: стены. Бой начнётся, когда оба этапа
-                # будут у обеих сторон
-                self.net_send_ready(again=True, stage=2)
+        if not self.car_my_cars():
+            self.set_msg('Поставьте хотя бы одну машинку на поле '
+                         'соперника!', DKRED)
+            return
+        self.deselect()
+        self.unit_state['size'] = 2
+        mode = self.play_mode()
+        if mode == 'local':
+            if self.game['turn'] == 'player1':
+                self.game['turn'] = 'player2'
+                self.btn_start.label = 'Готово'
+                if self.cars_tut_active():
+                    # в туториале за второго игрока играет компьютер
+                    self.car_auto_place(self.car_foe_fld(), 'car')
+                    self.game['phase'] = 'battle'
+                    self.btn_start.label = 'Бой идёт'
+                    self.cars_begin()
+                    return
+                self.set_msg('Игрок 2: поставьте машинки на ЛЕВОМ поле '
+                             'и нажмите «Готово» — они поедут вправо, '
+                             'на территорию игрока 1', NAVY)
                 return
             self.game['phase'] = 'battle'
             self.btn_start.label = 'Бой идёт'
             self.cars_begin()
             return
-
+        if mode == 'ai':
+            self.car_place_ai()
+            self.game['phase'] = 'battle'
+            self.btn_start.label = 'Бой идёт'
+            self.cars_begin()
+            return
+        # по сети: отправляем свои машинки и ждём машинки соперника
+        self.net_send_ready()
 
     def cars_begin(self):
-        """Бой начался: первый ход у машинок."""
-        # начало боя: первый ход у машинок
+        """Бой начался."""
         self.game['phase'] = 'battle'
         self.game['turn'] = 'player1'
         self.game['my_moves'] = 0
         self.game['enemy_moves'] = 0
+        self.unit_state['size'] = 2
         self.deselect()
-        self.cars_turn_feedback()
+        self.cars_tutorial_hit('start')
+        self.set_msg('БОЙ. В свой ход: двигаем свою машинку или стену '
+                     'либо ставим одну стену на своём поле', DGREEN)
         self.cars_maybe_ai()
 
     def car_start(self, mode, human='player1'):
         """Запуск нового режима.
 
         mode: 'local' — оба за одним экраном, 'ai' — против машины,
-        'net' — по сети (хост играет за машинки, клиент — за защиту).
-        human: за кого играет человек в игре с ИИ ('player1' — машинки,
-        'player2' — защита).
+        'net' — по сети. Ни в одном случае нет отдельной роли
+        «нападающий» или «защитник»: каждый игрок и едет на чужое
+        поле машинками, и строит стены на своём.
+        human: за какого игрока играет человек против ИИ.
         """
         self.game['mode'] = CAR_MODE
         self.car_play = mode
@@ -2414,41 +2447,40 @@ class TrigBattle:
         self.unit_state['size'] = 1
         self.set_mode('cars')
         self.cars_widgets_apply()
-        self.FL['name'] = 'МАШИНКИ' if human != 'player2' or \
-            mode != 'ai' else 'ПРЕПЯТСТВИЯ'
-        self.FR['name'] = 'ПРЕПЯТСТВИЯ' if self.FL['name'] == 'МАШИНКИ' \
-            else 'МАШИНКИ'
+        self.FL['name'] = self.car_fld_name('player1')
+        self.FR['name'] = self.car_fld_name('player2')
         self.reset_game()
-        if mode == 'ai':
-            # расстановка ИИ — ПОСЛЕ сброса, иначе reset_game
-            # сносит только что поставленные фигуры
-            self.car_place_ai()
         self.show_screen('game')
-        first = ('Расставьте МАШИНКИ на ЛЕВОМ поле (за пределами '
-                 'окружности, внутри квадрата) и нажмите «Готово».'
-                 if self._car_human_is_cars()
-                 else 'Расставьте ПРЕПЯТСТВИЯ на ЛЕВОМ поле и нажмите '
-                      '«Готово». Не накрывайте жёлтый круг!')
-        self.set_msg(first, NAVY)
+        who = self.car_now()
+        side = 'ЛЕВОМ' if self.car_foe_fld() is self.FL else 'ПРАВОМ'
+        self.set_msg('Расстановка машинок: %s, игрок %s ставит свои '
+                     'машинки на %s поле — это поле СОПЕРНИКА. '
+                     'Стены ставятся только в бою, в свой ход.'
+                     % (side, who[-1], side), NAVY)
 
-    def _car_human_is_cars(self):
-        """Ходит ли человек машинками в этом заходе."""
+    def car_fld_name(self, player):
+        """Подпись поля: в локальной игре — по игроку, иначе — '
+        'ваше/поле соперника'."""
         if self.play_mode() == 'local':
-            return True
+            return 'ПОЛЕ ИГРОКА %s' % player[-1]
         if self.play_mode() == 'net':
-            return self._net_my_turn() == 'player1'
-        return getattr(self, 'car_human', 'player1') == 'player1'
+            mine = self._net_my_turn()
+        else:
+            mine = getattr(self, 'car_human', 'player1')
+        return 'ВАШЕ ПОЛЕ' if player == mine else 'ПОЛЕ СОПЕРНИКА'
+
+    def car_ai_side(self):
+        """Сторона компьютера: та, что не человек."""
+        if self.play_mode() != 'ai':
+            return None
+        human = getattr(self, 'car_human', 'player1')
+        return 'player2' if human == 'player1' else 'player1'
 
     def car_place_ai(self):
-        """ИИ расставляет свою сторону сразу, чтобы игрок не ждал.
-
-        Поле выбирает car_field(): когда за машинки играет человек,
-        стены computer ставит на правом поле, и наоборот.
-        """
-        if self._car_human_is_cars():
-            self.car_auto_place(self.car_field('wall'), 'wall')
-        else:
-            self.car_auto_place(self.car_field('car'), 'car')
+        """ИИ расставляет свои машинки сразу: ехать ему на наше поле."""
+        ai = self.car_ai_side()
+        self.car_auto_place(self.car_fld_of('player2' if ai == 'player1'
+                                            else 'player1'), 'car')
         self.unit_state['selected'] = None
 
     def car_auto_place(self, fld, kind):
@@ -2502,25 +2534,62 @@ class TrigBattle:
         return self.car_play if self.car_mode() else self.game['mode']
 
     def car_kind(self, fld=None):
-        """Что ставим сейчас: сначала машинки (place1), потом защита."""
-        if self.game.get('phase') == 'place2':
-            return 'wall'
+        """Что ставим на расстановке: только машинки.
+
+        Стены до боя ставить нельзя — они строятся в своём ходу.
+        """
         return 'car'
 
-    def car_local_cars(self):
-        """Машинки играются на этом экране (тогда они на левом поле)."""
+    def car_fld_of(self, player):
+        """Поле игрока: левое — player1, правое — player2."""
+        return self.FL if player == 'player1' else self.FR
+
+    def car_now(self):
+        """Чей сейчас ход (и чья идёт расстановка).
+
+        В локальной игре ход переходит между игроками, по сети и против
+        ИИ ход всегда за тем, за кем этот экран.
+        """
         mode = self.play_mode()
         if mode == 'local':
-            return True
+            return self.game.get('turn', 'player1')
         if mode == 'net':
-            return self._net_my_turn() == 'player1'
-        return getattr(self, 'car_human', 'player1') == 'player1'
+            return self._net_my_turn()
+        return getattr(self, 'car_human', 'player1')
 
-    def car_field(self, kind):
-        """Какое поле отдано под машинки, а какое под защиту."""
-        if self.car_local_cars():
-            return self.FL if kind == 'car' else self.FR
-        return self.FR if kind == 'car' else self.FL
+    def car_my_fld(self):
+        """Моё поле: тут стоят МОИ стены и ездят чужие машинки."""
+        return self.car_fld_of(self.car_now())
+
+    def car_foe_fld(self):
+        """Поле соперника: тут стоят ЕГО стены и ездят МОИ машинки."""
+        mine = self.car_my_fld()
+        return self.FR if mine is self.FL else self.FL
+
+    def car_owner(self, un):
+        """Чья это фигура.
+
+        Стены принадлежат тому, чьё поле, машинки — тому, чьё поле
+        ИМЕННО ОНИ АТАКУЮТ, то есть сопернику владельца поля.
+        """
+        who = self.car_side_of_fld(un['fld'])
+        if un['type'] == 'wall':
+            return who
+        return 'player2' if who == 'player1' else 'player1'
+
+    def car_owner_cars(self, who):
+        """Машинки игрока: они стоят на поле его соперника."""
+        fld = self.car_fld_of('player2' if who == 'player1' else 'player1')
+        return [u for u in fld['units']
+                if u['type'] == 'car' and u.get('left', 1) > 0]
+
+    def car_my_cars(self):
+        """Мои машинки — они на поле соперника."""
+        return [u for u in self.car_foe_fld()['units'] if u['type'] == 'car']
+
+    def car_my_walls(self):
+        """Мои стены — они на моём поле."""
+        return [u for u in self.car_my_fld()['units'] if u['type'] == 'wall']
 
     def car_units(self, kind):
         """Флот указанного вида со всех полей (у каждого свой)."""
@@ -2550,27 +2619,19 @@ class TrigBattle:
         """Какие виды фигур показывать в панели этого поля."""
         kinds = set(un['type'] for un in fld['units'])
         if self.build_fld() is fld:
-            kinds.add(self.car_kind())
+            kinds.add('car')
+        if self.game['phase'] == 'battle':
+            kinds.add('wall')
         return [k for k in ('car', 'wall') if k in kinds] or ['car']
 
-    def car_my_field(self):
-        """Поле, на котором этот экран строит в новом режиме.
-
-        В локальной игре за одним экраном сидят оба игрока, и каждое
-        поле — своя сторона, поэтому возвращаем None: строить можно
-        на любом поле. По сети и против ИИ строим только на своём.
-        """
-        if self.play_mode() == 'local':
-            # в локальной игре поля принадлежат разным игрокам, а
-            # экран общий: строить можно на любом из них
-            return None
-        # и по сети, и против ИИ свой флот лежит на поле своей роли
-        return self.car_field('car' if self.car_local_cars() else 'wall')
-
     def car_can_build(self, fld):
-        """Можно ли этому экрану строить на этом поле."""
-        my = self.car_my_field()
-        return my is None or fld is my
+        """Можно ли строить стену на этом поле.
+
+        Стены строятся только на СВОЁМ поле: там, где мы защищаем
+        жёлтый круг. На поле соперника мы ставим машинки (и только до
+        начала боя).
+        """
+        return fld is self.car_my_fld()
 
     @staticmethod
     def car_in_square(p):
@@ -2794,32 +2855,30 @@ class TrigBattle:
         return None
 
     def car_after_move(self):
-        """Общие проверки после хода: конец партии, запрет хода себе."""
+        """Проверки после хода: конец партии и передача хода."""
         un = self.unit_state.get('selected')
         if un is not None and un.get('left', 1) <= 0:
             self.remove_unit(un)
-        cars = [u for u in self.car_units('car')
-                if u.get('left', 1) > 0]
-        if self.game['phase'] == 'battle' and not cars:
-            self.car_end(win=False)
-            return True
-        # ход чередуется во всех видах игры, включая локальную:
-        # сначала машинки, потом защита, и наоборот
-        self.game['turn'] = ('player2' if self.game['turn'] == 'player1'
-                             else 'player1')
+        # проиграл тот, у кого не осталось машинок: своих машинок он
+        # ставил на поле соперника, и ездили они тоже за него
+        if self.game['phase'] == 'battle' and un is not None:
+            who = self.car_owner(un)
+            left = [u for u in self.car_units('car')
+                    if u.get('left', 1) > 0 and self.car_owner(u) == who]
+            if not left:
+                self.game['turn'] = who
+                self.car_end(win=False, who=who)
+                return True
+        self.car_next_turn()
         return False
 
     def car_my_side(self):
         """Сторона, за которую играет этот экран (None — ходят оба)."""
+        if self.play_mode() == 'local':
+            return None
         if self.play_mode() == 'ai':
             return getattr(self, 'car_human', 'player1')
-        if self.play_mode() == 'net':
-            return self._net_my_turn()
-        return None
-
-    def _car_side_of(self, un):
-        """Чья это фигура по полю: левое поле — player1 (машинки)."""
-        return 'player1' if un['fld'] is self.FL else 'player2'
+        return self._net_my_turn()
 
     def car_make_move(self):
         """Кнопка «Ход»: двигаем выбранную фигуру на одну клетку."""
@@ -2832,15 +2891,18 @@ class TrigBattle:
             return
         mine = self.car_my_side()
         if mine is not None and (self.game['turn'] != mine or
-                                 self._car_side_of(un) != mine):
+                                 self.car_owner(un) != mine):
             self.set_msg('Сейчас ход соперника', NAVY)
+            return
+        if mine is None and self.game['turn'] != self.car_owner(un):
+            self.set_msg('Сейчас ход другого игрока', NAVY)
             return
         txt = self.car_move_unit(un)
         self.game['last'] = txt
         if self.net is not None and self.play_mode() == 'net':
             self.car_send_move(un)
         if 'ЖЁЛТОГО' in txt:
-            self.car_end(win=True)
+            self.car_end(win=True, who=self.car_owner(un))
             return
         self.set_msg(txt, DGREEN if 'разворот' in txt else NAVY)
         self.cars_tutorial_hit('move')
@@ -2862,13 +2924,6 @@ class TrigBattle:
         self.cars_turn_feedback()
 
     # ---------------- ИИ в новом режиме ----------------
-    def car_ai_side(self):
-        """Сторона компьютера: противоположная человеку."""
-        if self.play_mode() != 'ai':
-            return None
-        return ('player2' if getattr(self, 'car_human', 'player1') ==
-            'player1' else 'player1')
-
     def cars_maybe_ai(self):
         """Если сейчас ход компьютера — пусть он и ходит (с задержкой)."""
         if self.play_mode() != 'ai' or self.game['phase'] != 'battle':
@@ -2895,10 +2950,20 @@ class TrigBattle:
             return
         self.cars_turn_feedback()
 
+    def car_ai_fld(self):
+        """Поле компьютера: там его стены."""
+        ai = self.car_ai_side()
+        return self.car_fld_of(ai) if ai else self.car_my_fld()
+
+    def car_ai_cars(self):
+        """Машинки компьютера: они ездят по НАШЕМУ полю."""
+        fld = self.FL if self.car_ai_fld() is self.FR else self.FR
+        return [u for u in fld['units']
+                if u['type'] == 'car' and u.get('left', 1) > 0]
+
     def car_ai_drive(self):
         """Машинка компьютера: едет к жёлтому кругу, обходя стены."""
-        cars = [u for u in self.car_field('car')['units']
-                if u['type'] == 'car' and u.get('left', 1) > 0]
+        cars = self.car_ai_cars()
         if not cars:
             return 'машинок не осталось'
         # сперва ищем тот ход, который приближает к центру
@@ -2925,17 +2990,17 @@ class TrigBattle:
         _, un, kind, hit = best
         txt = self.car_move_unit(un)
         if 'ЖЁЛТОГО' in txt:
-            self.car_end(win=True)
+            self.car_end(win=False, who=self.car_owner(un))
         return txt
 
     def car_ai_build(self):
-        """Защитник-компьютер строит стену, если они ещё остались.
+        """Компьютер строит стену на своём поле, если они остались.
 
         Правило то же, что у человека: одна стена за ход, только внутри
         круга и не на жёлтом круге. Ставим на свободную клетку как можно
         ближе к центру — так защита получается плотнее.
         """
-        fld = self.car_field('wall')
+        fld = self.car_ai_fld()
         free = [w for w, n in self.car_remaining(fld)['wall'].items() if n > 0]
         if not free:
             return False
@@ -2964,8 +3029,8 @@ class TrigBattle:
         return True
 
     def car_ai_wall(self):
-        """Защитник-компьютер: двигает стену к центру."""
-        walls = [u for u in self.car_field('wall')['units']
+        """Компьютер двигает свою стену к центру."""
+        walls = [u for u in self.car_ai_fld()['units']
                  if u['type'] == 'wall']
         if not walls:
             return 'стены разрушены'
@@ -3016,7 +3081,7 @@ class TrigBattle:
         """
         if self.play_mode() != 'net':
             return self.FL if side == 'L' else self.FR
-        return self.FR if self.car_my_field() is self.FL else self.FL
+        return self.FR if self.car_my_fld() is self.FL else self.FL
 
     def car_send_build(self, un):
         """Отправляем новую фигуру (стена, поставленная в бою)."""
@@ -3084,8 +3149,9 @@ class TrigBattle:
         txt = self.car_move_unit(un)
         self.game['last'] = txt
         if 'ЖЁЛТОГО' in txt:
-            self.set_msg('МАШИНКА СОПЕРНИКА ДОШЛА ДО ЖЁЛТОГО КРУГА!', DKRED)
-            self.car_end(win=False)
+            self.set_msg('Машинка соперника дошла до жёлтого круга — '
+                         'вы проиграли!', DKRED)
+            self.car_end(win=False, who=self.car_owner(un))
             return
         self.set_msg('Ход соперника: %s' % txt, DKORANGE)
         self.cars_after_change()
@@ -3121,8 +3187,7 @@ class TrigBattle:
             # «Готово» нужно только на расстановке, в бою эта кнопка
             # лишняя, а длинная подпись налезала бы на соседние кнопки
             if self.btn_start is not None:
-                self.btn_start.visible = self.game['phase'] in ('place1',
-                                                                 'place2')
+                self.btn_start.visible = self.game['phase'] == 'place'
         else:
             self.btn_move.label = 'Совершить ход'
             self.btn_del.label = 'Удалить'
@@ -3232,10 +3297,9 @@ class TrigBattle:
         соперника не видно, и наоборот — чужая машинка становится
         видимой, когда ломает препятствие.
         """
-        fld = self.FL if side == 'L' else self.FR
-        if un['fld'] is fld:
-            return True
-        return bool(un.get('revealed'))
+        return self.car_owner(un) == self.car_side_of_fld(
+            self.FL if side == 'L' else self.FR) or \
+            bool(un.get('revealed'))
 
     def car_draw_field_units(self, s, side):
         """Фигуры этого поля: свои и раскрытые чужие."""
@@ -3309,36 +3373,47 @@ class TrigBattle:
     # ---------------- туториал нового режима ----------------
     CAR_TUT = [
         {'key': 'place',
-         'text': 'НОВЫЙ РЕЖИМ: МАШИНКИ ПРОТИВ ПРЕПЯТСТВИЙ.\n\n'
-                 'Жёлтый круг в центре — цель. Коснётесь его машинкой — '
-                 'защитник проиграл.\n\nПоставьте машинку: тап '
-                 'по полю {CAR} ЗА ПРЕДЕЛАМИ ОКРУЖНОСТИ, но внутри '
-                 'чёрного квадрата.'},
+         'text': 'НОВЫЙ РЕЖИМ: МАШИНКИ И ПРЕПЯТСТВИЯ.\n\n'
+                 'Отдельного «нападающего» и «защитника» нет: вы и '
+                 'защитник, и нападающий.\n\n'
+                 'Жёлтый круг в центре поля — цель: машинка, '
+                 'коснувшаяся его, приносит победу тому, кто её '
+                 'поставил.\n\n'
+                 'Свои машинки ставим на поле СОПЕРНИКА ({CAR}) — '
+                 'за пределами окружности, внутри чёрного квадрата.'},
         {'key': 'rotate',
-         'text': 'Теперь поверните машинку: кнопка «Поворот» меняет '
-                 'направление на 45°.\nТак она поедет по диагонали '
-                 'снизу-слева наверх-направо.'},
+         'text': 'Кнопка «Поворот» меняет курс машинки на 45°, '
+                 'кнопки 1-4 — это длина стены.\n'
+                 'Машинка размером примерно в клетку.'},
+        {'key': 'start',
+         'text': 'Жмите «Готово» — и бой начинается.\n\n'
+                 'Дальше в свой ход вы делаете РОВНО ОДНО действие:\n'
+                 '  • двигаете свою машинку или свою стену;\n'
+                 '  • либо ставите одну новую стену на своём поле '
+                 '({WALL}).\n\n'
+                 'Стены до боя ставить нельзя — только во время '
+                 'игры, и только в свой ход.'},
         {'key': 'wall',
-         'text': 'Теперь вы — ЗАЩИТА.\nПоставьте чёрные квадраты '
-                 '(препятствия) на поле {WALL}, вокруг жёлтого '
-                 'круга: длина 1–4, '
-                 'кнопка «Поворот» меняет направление стены.\n'
+         'text': 'Поставьте стену: тап по свободной клетке своего '
+                 'поля вокруг жёлтого круга, длина 1-4, кнопка '
+                 '«Поворот» меняет направление.\n'
                  'Сам круг закрывать нельзя!'},
         {'key': 'move',
-         'text': 'Нажмите «Ход» — машинка проедет одну клетку.\n'
-                 'Рядом с машинкой показывается счётчик оставшихся '
-                 'ходов.'},
+         'text': 'Нажмите «Ход» — машинка проедет ровно одну '
+                 'клетку.\n'
+                 'У границы квадрата и при таране машинка '
+                 'разворачивается на 180°.\n'
+                 'Чужие фигуры не видны, пока не было столкновения.'},
     ]
 
     def cars_tutorial_place(self):
-        """Туториал идёт по обычным фазам: машинки -> поворот -> стены.
-
-        Поле пустое: игрок сам ставит машинку, поворачивает её, потом
-        строит стены, и только после этого едет к жёлтому кругу.
+        """Туториал идёт по обычным фазам: машинка -> поворот -> бой ->
+        стена -> ход. Второй игрок в туториале компьютерный, чтобы
+        игрок не переключался сам с собой.
         """
-        for fld in (self.car_field('car'), self.car_field('wall')):
+        for fld in (self.FL, self.FR):
             fld['units'].clear()
-        self.game['phase'] = 'place1'
+        self.game['phase'] = 'place'
         self.game['turn'] = 'player1'
         self.unit_state['selected'] = None
         self.unit_state['size'] = 1
@@ -3352,22 +3427,16 @@ class TrigBattle:
                 getattr(self, 'cars_tut', None) is not None and \
                 self.cars_tut.get('step', 0) < len(self.CAR_TUT))
 
-    def car_side_word(self, kind):
-        """«ЛЕВОМ» или «ПРАВОМ» — где сейчас строится эта сторона.
-
-        В локальной игре машинки ставятся слева, а стены — на
-        поле соперника, поэтому слово вычисляется, а не зашито
-        в текст подсказки.
-        """
-        return ('ЛЕВОМ' if self.car_field(kind) is self.FL
-                else 'ПРАВОМ')
+    def car_side_word(self, fld):
+        """«ЛЕВОМ» или «ПРАВОМ» — про указанное поле."""
+        return 'ЛЕВОМ' if fld is self.FL else 'ПРАВОМ'
 
     def cars_tut_text(self):
         if not self.cars_tut_active():
             return
         text = self.CAR_TUT[self.cars_tut['step']]['text']
-        text = text.replace('{CAR}', self.car_side_word('car'))
-        text = text.replace('{WALL}', self.car_side_word('wall'))
+        text = text.replace('{CAR}', self.car_side_word(self.car_foe_fld()))
+        text = text.replace('{WALL}', self.car_side_word(self.car_my_fld()))
         self.set_msg(text, DKORANGE)
 
     def cars_tut_advance(self):
@@ -3390,16 +3459,25 @@ class TrigBattle:
             self.cars_tut_advance()
 
 
-    def car_end(self, win):
-        """Партия закончена."""
+    def car_end(self, win, who=None):
+        """Партия закончена.
+
+        win=True — машинка дорвалась до жёлтого круга на чужом поле
+        (победа атаковавшего), win=False — у кого-то не осталось
+        машинок.
+        """
         if self.game['phase'] == 'over':
             return
         self.game['phase'] = 'over'
         if self.play_mode() == 'net' and self.net is not None:
             self.net.send({'t': 'over', 'winner': 'me' if win else 'you'})
-        who = 'Машинки прорвались!' if win else 'Защитник выстоял!'
-        self.set_msg(who, DGREEN if win else DKRED)
-        self.show_victory(who)
+        if who is None:
+            who = self.game.get('turn', 'player1')
+        name = self.car_player_name(who)
+        text = ('Машинки прорвались — %s победил!' % name if win else
+                'Машинки кончились — %s проиграл!' % name)
+        self.set_msg(text, DGREEN if win else DKRED)
+        self.show_victory(text)
         if self.play_mode() == 'net':
             self._net_save_stats(win)
 
@@ -3408,13 +3486,25 @@ class TrigBattle:
         self.unit_state['last'] = None
         self.update_angles()
 
+    def car_player_name(self, who):
+        """Как назвать игрока: в локальной игре — по номеру, иначе — '
+        'вы/соперник'."""
+        if self.play_mode() == 'local':
+            return 'ИГРОК %s' % who[-1]
+        me = self.car_now()
+        return 'ВЫ' if who == me else 'СОПЕРНИК'
+
     def cars_turn_feedback(self):
         """Подсказка, чей ход и что делать."""
         if self.game['phase'] != 'battle':
             return
-        who = 'МАШИНКИ' if self.game['turn'] == 'player1' else 'ЗАЩИТА'
-        left = len([u for u in self.car_units('car') if u.get('left', 1) > 0])
-        self.set_msg('Ход: %s. Машинок в игре: %d' % (who, left), NAVY)
+        who = self.game['turn']
+        left = len([u for u in self.car_units('car')
+                    if u.get('left', 1) > 0 and self.car_owner(u) == who])
+        self.set_msg('Ход: %s. В свой ход: двигаем свою машинку или стену '
+                     'либо ставим одну стену на своём поле. '
+                     'Машинок в игре: %d'
+                     % (self.car_player_name(who), left), NAVY)
 
     # =========================================================
     #  ОТРИСОВКА
@@ -3486,13 +3576,14 @@ class TrigBattle:
 
         # --- нижняя подсказка: тоже с переносом по ширине окна ---
         if self.car_mode():
-            hint = ('Расстановка: тап по полю — поставить или выбрать, '
-                    '«Поворот» — развернуть на 45°, 1–4 — длина '
-                    'препятствия   •   Бой: выберите машинку или стену и '
-                    'нажмите «Ход» — двинуть на клетку; тап по пустой '
-                    'клетке своей стороны в свой ход — поставить стену '
-                    '(одна за ход); у границы квадрата и при таране '
-                    'машинка разворачивается')
+            hint = ('Расстановка: свои машинки ставим на поле СОПЕРНИКА '
+                    '(тап по клетке за пределами окружности), «Поворот» — '
+                    'курс на 45°   •   Бой: в свой ход — либо «Ход» '
+                    'своей фигурой, либо тап по пустой клетке СВОЕГО '
+                    'поля — поставить одну стену (длина 1–4, круг не '
+                    'закрывать); стены до боя ставить нельзя; у границы '
+                    'круга и при таране машинка разворачивается, чужие '
+                    'фигуры видны только после столкновения')
         else:
             hint = ('Стройка: тап по полю — поставить/выбрать, '
                     '«Поворот» — развернуть, 1–5 — размер, «Удалить» — '
@@ -3568,14 +3659,15 @@ class TrigBattle:
         self.row4_fit()
         # --- ряд 1: углы и выбор прицела ---
         if self.car_mode():
-            # в новом режиме углов нет вообще: показываем, чей
-            # сейчас ход и что осталось на поле
-            who = 'МАШИНКИ' if self.game.get('turn') == 'player1' else 'ПРЕПЯТСТВИЯ'
-            blit_text(s, 'Ходит: %s' % who, (self.M, y1 + h1 // 2),
-                      int(15 * u), NAVY, 'lm', True)
-            blit_text(s, 'машинок: %d   стен: %d'
-                      % (len(self.car_units('car')),
-                         len(self.car_units('wall'))),
+            # в новом режиме углов нет вообще: показываем, чей ход,
+            # и сколько у этого игрока машинок и стен
+            who = self.game.get('turn', 'player1')
+            blit_text(s, 'Ходит: %s' % self.car_player_name(who),
+                      (self.M, y1 + h1 // 2), int(15 * u), NAVY, 'lm', True)
+            mine = self.car_owner_cars(who)
+            walls = len([u for u in self.car_fld_of(who)['units']
+                         if u['type'] == 'wall'])
+            blit_text(s, 'машинок: %d   стен: %d' % (len(mine), walls),
                       (self.ang_x[1], y1 + h1 // 2), int(14 * u),
                       DGRAY, 'lm')
         else:
@@ -3626,17 +3718,16 @@ class TrigBattle:
     def car_panel_title(self, idx, phase):
         """Заголовок боковой панели в новом режиме.
 
-        Никаких «Игрок 1 / Игрок 2» и «МОИ ЮНИТЫ»: в этом режиме у
-        сторон свои названия — МАШИНКИ и ПРЕПЯТСТВИЯ.
+        Отдельных «нападающего» и «защитника» нет, поэтому подпись
+        называет владельца поля, а не вид фигуры.
         """
         fld = self.FL if idx == 0 else self.FR
-        kind = 'car' if fld is self.car_field('car') else 'wall'
-        name = 'МАШИНКИ' if kind == 'car' else 'ПРЕПЯТСТВИЯ'
-        if phase in ('place1', 'place2'):
-            building = fld is self.build_fld()
-            return ('%s — СТРОЙКА:' % name) if building else (
-                '%s — готово' % name)
-        return '%s:' % name
+        who = self.car_side_of_fld(fld)
+        if phase == 'place' and fld is self.car_foe_fld() and \
+                who == self.car_now():
+            return 'ИГРОК %s — МАШИНКИ:' % who[-1]
+        return ('ИГРОК %s:' % who[-1] if self.play_mode() == 'local'
+                else ('ВЫ:' if who == self.car_now() else 'СОПЕРНИК:'))
 
     def draw_panel(self, s, r, fld, idx):
         u = self.u
@@ -3701,10 +3792,14 @@ class TrigBattle:
                       (r.x + pad, r.bottom - int(24 * u)),
                       max(10, int(12 * u)), DGRAY, 'lt')
         if self.car_mode():
-            # ходы и «сложность» здесь ни при чём
-            left = len([u for u in self.car_units('car')
-                        if u.get('left', 1) > 0])
-            blit_text(s, 'машинок в игре: %d' % left,
+            # ходы и «сложность» здесь ни при чём: показываем, сколько
+            # стен ещё можно построить на этом поле и сколько машинок
+            # ездит по нему
+            who = self.car_side_of_fld(fld)
+            left = sum(max(0, v) for v in
+                       self.car_remaining(fld)['wall'].values())
+            cars = len(self.car_owner_cars(who))
+            blit_text(s, 'стен осталось: %d   машинок: %d' % (left, cars),
                       (r.x + pad, r.bottom - int(28 * u)),
                       max(10, int(12 * u)), DGRAY, 'lt')
 
@@ -4386,14 +4481,16 @@ class TrigBattle:
         # (по сети) хранится отдельно — иначе игра перестала бы
         # считаться сетевой и никто бы не ходил
         if getattr(self, 'pending_mode', None) == CAR_MODE:
-            self.game['mode'] = CAR_MODE
-            self.car_play = 'net'
+            # новый режим запускаем через car_start: он ставит фазу
+            # 'place', выбирает вид фигур и подписи полей
             self.pending_mode = None
-            self.cars_widgets_apply()
+            self.car_start('net', 'player1')
+            self.FL['name'] = 'ВАШЕ ПОЛЕ (%s)' % self.my_nick()
+            self.FR['name'] = 'ПОЛЕ СОПЕРНИКА: %s' % self.net_peer_nick
         else:
             self.game['mode'] = 'net'
-        self.FL['name'] = 'Вы (%s)' % self.my_nick()
-        self.FR['name'] = self.net_peer_nick
+            self.FL['name'] = 'Вы (%s)' % self.my_nick()
+            self.FR['name'] = self.net_peer_nick
         # Оба угла и обе точки — свои, поэтому выбор угла и точки
         # остаётся за игроком: хоста — первый, клиента — второй, но
         # выбрать можно любой из двух точек
@@ -4469,30 +4566,18 @@ class TrigBattle:
             print('[trigbattle] соперник прислал углы — игнорирую, '
                   'у нас свои', flush=True)
         elif kind == 'ready':
-            # в новом режиме флоты приходят в два захода:
-            # сначала машинки, потом препятствия
-            stage = msg.get('stage')
-            if not self.car_mode() or stage is None or stage == 2:
-                self.net_peer_ready = True
-            self.FR['units'] = []
+            # флот приходит одним сообщением; в новом режиме это
+            # машинки соперника, и едут они по НАШЕМУ полю
+            self.net_peer_ready = True
+            fld = self.car_my_fld() if self.car_mode() else self.FR
+            fld['units'] = []
             for un in netgame.decode_fleet(msg.get('units')):
-                # fld — ссылка на наше поле соперника: без неё отрисовка
+                # fld — ссылка на наше поле: без неё отрисовка
                 # и подсчёт оставшихся кораблей не работают
-                un['fld'] = self.FR
-                self.FR['units'].append(un)
-            self.FR['misses'].clear()
-            self.FR['hints'].clear()
-            if (self.car_mode() and stage == 1 and
-                    not self.car_local_cars() and self.game['phase'] == 'place1'):
-                # соперник прислал машинки — наша очередь ставить
-                # стены, переходим сразу, не дожидаясь кнопки
-                self.game['phase'] = 'place2'
-                self.btn_start.label = 'Готово'
-                self.deselect()
-                self.unit_state['size'] = 2
-                self.set_msg('Машинки соперника получены. Расставьте '
-                             'ПРЕПЯТСТВИЯ на ЛЕВОМ поле и нажмите '
-                             '«Готово»', NAVY)
+                un['fld'] = fld
+                fld['units'].append(un)
+            fld['misses'].clear()
+            fld['hints'].clear()
             self._net_maybe_start()
         elif kind == 'car_move':
             self.car_apply_move(msg)
@@ -4515,23 +4600,23 @@ class TrigBattle:
     def net_send_ready(self, again=False, stage=None):
         """Отправляем свой флот и ждём флот соперника.
 
-        В новом режиме флотов два: сначала машинки (этап 1),
-        потом препятствия (этап 2). Этап передаётся явно, потому
-        что к этому моменту фаза уже переключилась на расстановку
-        препятствий, и по фазе этап определить нельзя.
+        В новом режиме передаём только машинки: стены до боя ставить
+        нельзя, их соперник увидит сообщениями car_build по ходу игры.
+        Свои машинки стоят на поле соперника — отправляем именно их.
         """
         if self.net is None or (self.net_ready_sent and not again):
             return
-        if not self.FL['units']:
-            self.set_msg('Сначала расставьте флот!', DKRED)
+        fld = self.car_foe_fld() if self.car_mode() else self.FL
+        units = [u for u in fld['units']
+                 if not self.car_mode() or u['type'] == 'car']
+        if not units:
+            self.set_msg('Сначала поставьте машинки на поле соперника!',
+                         DKRED)
             return
-        if stage is None:
-            stage = 2 if (self.car_mode() and
-                          self.game.get('phase') == 'place2') else 1
-        self.net.send({'t': 'ready', 'stage': stage,
-                       'units': netgame.encode_fleet(self.FL['units'])})
+        self.net.send({'t': 'ready',
+                       'units': netgame.encode_fleet(units)})
         self.net_ready_sent = True
-        self.set_msg('Флот отправлен. Ждём флот соперника...', NAVY)
+        self.set_msg('Машинки отправлены. Ждём машинки соперника...', NAVY)
         self._net_maybe_start()
 
     def _net_maybe_start(self):
