@@ -636,6 +636,22 @@ def main():
           'на своём поле стена не построилась: %d -> %d'
           % (n_my, len(my['units'])))
 
+    # --- 19a. стена не наезжает на другую стену своего поля ---
+    app = battle_app(cars=1, walls=1, wall_len=1)
+    wf = app.car_field('wall')
+    wf['units'].clear()
+    app.place_unit(wf, [(0.4, 0.4)], 0, 1, 'wall')
+    app.place_unit(wf, [(0.5, 0.4)], 0, 1, 'wall')
+    wall = wf['units'][0]
+    wall['dir'] = 0
+    app.select(wall)
+    app.game['turn'] = app.car_side_of_fld(wf)
+    app.car_make_move()
+    check(wall['pts'][0] == (0.4, 0.4),
+          'стена не встаёт на соседнюю стену того же поля: %r'
+          % (wall['pts'][0],),
+          'стены слиплись: стена уехала на %r' % (wall['pts'][0],))
+
     # --- 20. препятствие вращается ---
     for cells, d0 in (([(-0.6, 0.2), (-0.5, 0.2), (-0.4, 0.2)], 0),
                       ([(-0.6, 0.2), (-0.5, 0.2)], 0),

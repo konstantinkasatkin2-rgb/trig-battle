@@ -2764,9 +2764,16 @@ class TrigBattle:
         return 'Машинка проехала на клетку'
 
     def car_move_wall(self, un):
-        """Защитник двигает своё препятствие на клетку."""
+        """Защитник двигает своё препятствие на клетку.
+
+        Проверяем занятость по СВОЕМУ полю фигуры, а не по левому:
+        стена может лежать на любом поле (защитник строит и на поле
+        соперника, по сети поля вообще нумеруются по-разному), и с
+        проверкой по FL соперник посчитал бы ход иначе.
+        """
         nxt = self.car_step_vector(un)
-        if not self.car_points_ok([nxt], 'wall', self.FL['units'], ignore=un):
+        if not self.car_points_ok([nxt], 'wall', un['fld']['units'],
+                                  ignore=un):
             return 'Препятствие туда не встанет'
         sx, sy = self.car_delta(*DIRECTIONS[un['dir']])
         un['anim'] = ([tuple(p) for p in un['pts']],
