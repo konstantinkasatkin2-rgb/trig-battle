@@ -16,6 +16,36 @@ set -uo pipefail
 # каталог этого скрипта — нужен, чтобы найти find_sig_block.py
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# keytool есть в PATH у любого CI с JDK, но не обязательно на машине
+# разработчика, поэтому ищем и в типовых местах.
+find_keytool() {
+    command -v keytool 2>/dev/null && return 0
+    for c in /usr/bin/keytool /usr/libexec/java_home/bin/keytool \
+             "$HOME"/.buildozer/android/platform/android-sdk/*/*/keytool \
+             "/c/Program Files/Java"/*/bin/keytool.exe \
+             "/c/Program Files (x86)/Java"/*/bin/keytool.exe; do
+        if [ -x "$c" ]; then echo "$c"; return 0; fi
+    done
+    for c in /usr/lib/jvm/*/bin/keytool; do
+        if [ -x "$c" ]; then echo "$c"; return 0; fi
+    done
+    return 0
+}
+KEYTOOL=$(find_keytool)
+
+# Отпечаток сертификата через apksigner — запасной путь для подписи
+# схемы v2/v3, где файла в META-INF нет.
+apksigner_cert_fallback() {
+    local signer
+    signer=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner \
+                  "$HOME"/.buildozer/android/platform/android-sdk/build-tools/*/apksigner \
+                  2>/dev/null | sort -V | tail -1)
+    [ -z "$signer" ] && return 0
+    "$signer" verify --print-certs "$1" 2>/dev/null \
+        | grep -m1 -i 'SHA-256 digest' \
+        | sed 's/.*digest: *//' | tr -d ' \r' | tr 'A-F' 'a-f'
+}
+
 APK="${1:-}"
 if [ -z "$APK" ]; then
     APK=$(ls -1 dist/*.apk 2>/dev/null | head -1)
@@ -34,10 +64,22 @@ fi
 SIG=$(unzip -Z1 "$APK" | grep -E '^META-INF/.*\.(RSA|DSA|EC)$' | head -1)
 if [ -n "$SIG" ]; then
     echo "подпись v1: $SIG"
-    CERT=$(unzip -p "$APK" "$SIG" | sha256sum | cut -d' ' -f1)
+    # Отпечаток САМОГО сертификата, а не хеш всего блока подписи:
+    # в блоке есть время подписи, поэтому он меняется от сборки к сборке
+    # даже при одном и том же ключе.
+    CERT=""
+    if [ -n "$KEYTOOL" ]; then
+        CERT=$("$KEYTOOL" -printcert -jarfile "$APK" 2>/dev/null \
+               | grep -m1 'SHA256:' | sed 's/.*SHA256: *//' \
+               | tr -d ' :\r' | tr 'A-F' 'a-f')
+    else
+        echo "keytool не найден — ищу через apksigner"
+    fi
+    [ -z "$CERT" ] && CERT=$(apksigner_cert_fallback "$APK")
 else
     echo "подписи v1 нет — проверяем блок v2/v3"
-    CERT=$(python3 "$SCRIPT_DIR/find_sig_block.py" "$APK")
+    CERT=$(apksigner_cert_fallback "$APK")
+    [ -z "$CERT" ] && CERT=$(python3 "$SCRIPT_DIR/find_sig_block.py" "$APK")
 fi
 
 if [ -z "$CERT" ]; then
