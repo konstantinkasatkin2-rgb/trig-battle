@@ -64,49 +64,82 @@ def write_manifest(dest_dir):
     return path
 
 
-def install_dir_from_arg(argv):
-    """Каталог site-packages сборки, если он уже существует."""
+def install_dirs(argv):
+    """Каталоги site-packages сборки, если дерево уже создано.
+
+    Путь не угадываем: p4a создаёт каталог python-installs не сразу под
+    platform/, а глубже (build-<arch>/build/python-installs), и с
+    изменением версий путь менялся. Раньше здесь был зашит неверный
+    адрес, и синхронизация молча ничего не делала, а в APK уезжал
+    старый код игры. Поэтому ищем все каталоги python-installs где
+    угодно под .buildozer и обновляем их все.
+    """
     if len(argv) > 1:
-        return argv[1]
-    base = os.path.join(ROOT, 'ready_apk', '.buildozer', 'android',
-                        'platform', 'python-installs')
+        return [argv[1]]
+    base = os.path.join(ROOT, 'ready_apk', '.buildozer')
     if not os.path.isdir(base):
-        return None
+        return []
     found = []
-    for dist in os.listdir(base):
-        arch_dir = os.path.join(base, dist)
-        if not os.path.isdir(arch_dir):
+    for dirpath, dirnames, _ in os.walk(base):
+        if os.path.basename(dirpath) != 'python-installs':
             continue
-        for arch in os.listdir(arch_dir):
-            found.append(os.path.join(arch_dir, arch))
-    return found[0] if found else None
+        for dist in sorted(dirnames):
+            dist_dir = os.path.join(dirpath, dist)
+            for arch in sorted(os.listdir(dist_dir)):
+                arch_dir = os.path.join(dist_dir, arch)
+                if os.path.isdir(arch_dir):
+                    found.append(arch_dir)
+        dirnames[:] = []          # внутрь python-installs не лезем
+    return found
+
+
+def copy_into(dest):
+    """Копирует модули и манифест, затем ПРОВЕРЯЕТ результат по хешам."""
+    import shutil
+    print('\nобновляю код игры в %s' % dest)
+    for rel in (ENTRY_MODULE,) + GAME_MODULES:
+        src = os.path.join(ROOT, rel)
+        name = os.path.basename(rel)
+        shutil.copy(src, os.path.join(dest, name))
+        print('   %s' % name)
+    write_manifest(dest)
+    print('   %s' % MANIFEST_NAME)
+    # копирование молча ничего не делает, если путь перепущен: проверяем
+    wanted = {}
+    for line in manifest_text().strip().splitlines():
+        parts = line.split()
+        wanted[parts[0]] = parts[1]
+    for name, digest in wanted.items():
+        path = os.path.join(dest, name)
+        with open(path, 'rb') as fd:
+            got = hashlib.sha256(
+                fd.read().replace(b'\r\n', b'\n')).hexdigest()
+        if got != digest:
+            print('   ОШИБКА: %s в дереве не совпадает с исходником' % name)
+            return False
+    print('   проверено: все четыре модуля совпадают с исходником')
+    return True
 
 
 def main():
-    dest = install_dir_from_arg(sys.argv)
     text = manifest_text()
     print('манифест сборки:')
     for line in text.strip().splitlines():
         print('   ' + line)
 
-    if dest is None:
+    dests = install_dirs(sys.argv)
+    if not dests:
         print('\nдерево сборки ещё не создано — код скопирует рецепт '
               '(холодная сборка)')
         return 0
-    if not os.path.isdir(dest):
-        print('\nкаталог %s не найден, пропускаю' % dest)
-        return 0
-
-    print('\nобновляю код игры в %s' % dest)
-    import shutil
-    for rel in (ENTRY_MODULE,) + GAME_MODULES:
-        src = os.path.join(ROOT, rel)
-        name = os.path.basename(rel)
-        target = os.path.join(dest, name)
-        shutil.copy(src, target)
-        print('   %s -> %s' % (name, target))
-    path = write_manifest(dest)
-    print('   %s -> %s' % (MANIFEST_NAME, path))
+    bad = 0
+    for dest in dests:
+        if not copy_into(dest):
+            bad += 1
+    if bad:
+        print('\nОШИБКА: не удалось обновить %d каталог(ов) сборки. Сборка '
+              'упала бы с устаревшим кодом внутри APK.' % bad)
+        return 1
     return 0
 
 
