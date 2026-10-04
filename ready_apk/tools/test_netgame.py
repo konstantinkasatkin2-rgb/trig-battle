@@ -159,6 +159,102 @@ def main():
           'угол соперника синхронизирован (%.1f)' % cli.s1,
           'угол не пришёл (у клиента %.1f)' % cli.s1)
 
+    # --- 3b. каждый настраивает только СВОЙ угол ---
+    # Проверяем то, что жаловались: угол соперника двигался у нас на экране
+    # сам, произвольно, и тянул прицел в сторону.
+    check(host.net_my_angle() == 1 and cli.net_my_angle() == 2,
+          'свой угол у каждого свой (хост=1, клиент=2)',
+          'свои углы не разведены: хост=%s, клиент=%s'
+          % (host.net_my_angle(), cli.net_my_angle()))
+
+    my_before = cli.s2
+    cli._net_handle({'t': 'angles', 'n': cli.net_my_angle(), 'a': 200.0})
+    check(cli.s2 == my_before and abs(cli.s1 - 37.0) < 0.01,
+          'сообщение с НАШИМ углом игнорируется',
+          'чужое сообщение переписало наш угол: s2 %.1f -> %.1f'
+          % (my_before, cli.s2))
+
+    host._net_handle({'t': 'angles', 'n': 2, 'a': 123.0})
+    check(abs(host.s2 - 123.0) < 0.01 and abs(host.s1 - 37.0) < 0.01,
+          'угол соперника принят в его ползунок, наш не тронут',
+          'угол соперника принят неверно: s1=%.1f s2=%.1f'
+          % (host.s1, host.s2))
+
+    s1_before = cli.s1
+    cli.set_angle1(11.0)
+    check(abs(cli.s1 - s1_before) < 0.01,
+          'попытка сдвинуть чужой угол 1 проигнорирована',
+          'клиент сдвинул чужой угол 1: %.1f -> %.1f'
+          % (s1_before, cli.s1))
+
+    cli.set_angle2(70.0)
+    for _ in range(60):
+        host._net_poll()
+        host.draw()
+        if abs(host.s2 - 70.0) < 0.01:
+            break
+        time.sleep(0.02)
+    check(abs(host.s2 - 70.0) < 0.01 and abs(host.s1 - 37.0) < 0.01,
+          'угол клиента доехал до хоста (%.1f), наш не сбит' % host.s2,
+          'угол клиента не доехал или сбил наш: s1=%.1f s2=%.1f'
+          % (host.s1, host.s2))
+
+    # --- 3c. скрытность: поле, флот и прицел соперника ---
+    # Своё поле видно всегда, чужое — только потопленные корабли.
+    for who, app_ in (('хост', host), ('клиент', cli)):
+        own = app_.FL['units'][0]
+        foe = app_.FR['units'][0]
+        check(app_.unit_visible(own, app_.FL),
+              'у %s свой флот виден' % who,
+              'у %s не виден свой флот' % who)
+        check(not app_.unit_visible(foe, app_.FR),
+              'у %s флот соперника скрыт' % who,
+              'у %s виден флот соперника' % who)
+        app_.FR['units'][0]['hits'] = set(app_.FR['units'][0]['pts'])
+        check(app_.unit_visible(foe, app_.FR),
+              'у %s потопленный корабль соперника виден' % who,
+              'у %s не виден потопленный корабль соперника' % who)
+        app_.FR['units'][0]['hits'] = set()
+
+    # Чужие элементы управления скрыты: ползунок угла, поля tg/ctg (или
+    # sin/cos), кнопки выбора угла и точки выстрела.
+    for who, app_, mine in (('хост', host, 1), ('клиент', cli, 2)):
+        groups = [all(w.visible for w in app_.row_angles[(mine - 1) * 3:
+                                                        mine * 3]),
+                  not any(w.visible for w in app_.row_angles[
+                      (2 - mine) * 3:(2 - mine) * 3 + 3])]
+        check(all(groups), 'у %s виден только свой ползунок угла' % who,
+              'у %s ползунки углов видны неверно: %r' % (who, groups))
+        mine_f = (app_.f_sin, app_.f_cos) if mine == 1 else \
+            (app_.f_tg, app_.f_ctg)
+        foe_f = (app_.f_tg, app_.f_ctg) if mine == 1 else \
+            (app_.f_sin, app_.f_cos)
+        check(all(w.visible for w in mine_f) and
+              not any(w.visible for w in foe_f),
+              'у %s числовые поля — только свои' % who,
+              'у %s числовые fields показаны неверно' % who)
+        check(not any(w.visible for w in (app_.btn_aim1, app_.btn_aim2,
+                                          app_.btn_shot1, app_.btn_shot2)),
+              'у %s выбор чужого угла и прицела скрыт' % who,
+              'у %s кнопки выбора угла/прицела не скрыты' % who)
+
+    # После выхода из сетевой игры все элементы управления возвращаются.
+    # Роль и режим временно меняем «в памяти», соединение не трогаем — ниже
+    # ещё нужен полный бой.
+    saved_mode = cli.game['mode']
+    cli.game['mode'] = 'local'
+    cli.net_role = None
+    cli._net_widgets_apply()
+    check(all(w.visible for w in cli.row_angles) and
+          all(w.visible for w in (cli.f_sin, cli.f_cos, cli.f_tg, cli.f_ctg,
+                                  cli.btn_aim1, cli.btn_aim2,
+                                  cli.btn_shot1, cli.btn_shot2)),
+          'после выхода из сети элементы управления на месте',
+          'после выхода из сети часть управления пропала')
+    cli.game['mode'] = saved_mode
+    cli.net_role = 'client'
+    cli._net_widgets_apply()
+
     # --- 4. выстрел: целимся точно в клетку флота соперника ---
     target = (0.50, 0.50)
     host.update_angles()
