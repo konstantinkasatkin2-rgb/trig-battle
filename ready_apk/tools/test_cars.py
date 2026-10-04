@@ -38,6 +38,25 @@ def new_app(w=1280, h=720):
     return app
 
 
+def car_draw_radius(app, side, un):
+    """Радиус круга машинки, который приложение рисует на самом деле."""
+    import pygame as pg
+    got = []
+    orig = pg.draw.circle
+
+    def spy(surf, color, center, radius, width=0):
+        if width == 0:
+            got.append(radius)
+        return orig(surf, color, center, radius, width)
+
+    pg.draw.circle = spy
+    try:
+        app.car_draw_car(app.base, un, side)
+    finally:
+        pg.draw.circle = orig
+    return got[0] if got else 0
+
+
 def battle_app(cars=1, walls=1, wall_len=2, wall_dir=0, human='player1',
                play='local'):
     """Готовая партия: расставлены машинки и стены, ход у машинок."""
@@ -324,23 +343,31 @@ def main():
           'нет экранов выбора: %s' % sorted(
               {'menu', 'difficulty', 'play_trig', 'play_cars'} - names))
     labels = {}
-    for scr in ('difficulty', 'play_trig', 'play_cars'):
+    for scr in ('difficulty', 'play_trig', 'play_cars', 'ai_diff',
+                 'cars_role'):
         labels[scr] = [getattr(w, 'label', '') for w in app.screens[scr]]
     check('Тригонометрический морской бой' in labels['difficulty'] and
           'Новый режим' in labels['difficulty'],
           'после «Начать игру» — два режима',
           'на экране выбора нет двух режимов: %r' % labels['difficulty'])
-    check(any('Игра по сети' in l for l in labels['play_cars']) and
-          any('Туториал' in l for l in labels['play_cars']) and
-          any('Локальная' in l for l in labels['play_cars']) and
-          any('ИИ' in l for l in labels['play_cars']),
-          'у нового режима есть ИИ, локальная игра, туториал и сеть',
-          'у нового режима неполный набор кнопок: %r' % labels['play_cars'])
-    check(any('Игра по сети' in l for l in labels['play_trig']) and
-          any('Туториал' in l for l in labels['play_trig']),
-          'у тригонометрического режима кнопки на месте',
-          'у тригонометрического режима неполный набор: %r'
-          % labels['play_trig'])
+    want = ['Игра против ИИ', 'Игра против игрока', 'Туториал', 'Игра по сети']
+    for scr, title in (('play_cars', 'нового режима'),
+                       ('play_trig', 'тригонометрического режима')):
+        check(all(w in labels[scr] for w in want),
+              'у %s есть все четыре кнопки: %s' % (title, ', '.join(want)),
+              'у %s неполный набор кнопок: %r' % (title, labels[scr]))
+    check(sorted(labels['play_cars'][:4]) == sorted(labels['play_trig'][:4]),
+          'набор кнопок у обоих режимов одинаковый',
+          'наборы кнопок различаются: %r и %r'
+          % (labels['play_cars'], labels['play_trig']))
+    check([getattr(w, 'label', '') for w in app.screens['ai_diff']][:3] ==
+          ['Низкий', 'Средний', 'Высокий'],
+          'сложность выбирается отдельным экраном',
+          'на экране сложности не три уровня: %r' % labels['ai_diff'])
+    check([getattr(w, 'label', '') for w in app.screens['cars_role']][:2] ==
+          ['Я — МАШИНКИ', 'Я — ПРЕПЯТСТВИЯ'],
+          'роль против ИИ выбирается отдельным экраном',
+          'на экране роли нет двух кнопок: %r' % labels['cars_role'])
 
     # --- 16. туториал нового режима запускается ---
     app = new_app()
@@ -456,6 +483,278 @@ def main():
           'ход машинки у обоих одинаковый: %s' % (car['pts'][0],),
           'ходы разошлись: у хоста %s, у клиента %s'
           % (car['pts'][0], peer['pts'][0]))
+
+    # стена, поставленная прямо в бою, уходит сопернику сообщением
+    # (защитник — клиент, он играет за player2)
+    cli.game['turn'] = 'player2'
+    cli_wf = cli.car_my_field()
+    cli_side = 'L' if cli_wf is cli.FL else 'R'
+    cli.car_tap(cli_side, 0.5, -0.5, 1)
+    host_wf = host.car_peer_fld(cli_side)     # поле соперника на хосте
+    for _ in range(60):
+        host._net_poll()
+        host.draw()
+        if len([u for u in host_wf['units'] if u['type'] == 'wall']) >= 2:
+            break
+        time.sleep(0.02)
+    host_walls = [u for u in host_wf['units'] if u['type'] == 'wall']
+    check(len(host_walls) == 2 and
+          sorted(host_walls[-1]['pts']) == sorted(cli_wf['units'][-1]['pts']),
+          'стена, поставленная в бою, доехала до соперника: %r'
+          % (host_walls[-1]['pts'] if host_walls else None,),
+          'стена соперника не появилась: у хоста %d стен, у клиента %r'
+          % (len(host_walls), cli_wf['units'][-1]['pts']))
+
+    # теперь на поле машинок есть и стена: адрес фигуры в ходу должен
+    # считаться среди фигур своего вида, иначе стороны разойдутся
+    host.game['turn'] = 'player1'
+    host_cf = host.car_field('car')
+    host.place_unit(host_cf, [(0.4, 0.4), (0.5, 0.4)], 0, 2, 'wall')
+    wall_mix = host_cf['units'][-1]
+    host.car_send_build(wall_mix)
+    cli_mix = []
+    for _ in range(60):
+        cli._net_poll()
+        cli.draw()
+        cli_mix = [u for u in cli.car_field('car')['units']
+                   if u['type'] == 'wall']
+        if cli_mix:
+            break
+        time.sleep(0.02)
+    check(cli_mix and sorted(cli_mix[-1]['pts']) == sorted(wall_mix['pts']),
+          'стена на поле машинок доехала до соперника: %r'
+          % (cli_mix[-1]['pts'] if cli_mix else None,),
+          'стена на поле машинок не доехала: %r' % (cli_mix,))
+    host.game['turn'] = 'player1'
+    host.unit_state['selected'] = wall_mix
+    wall_mix['dir'] = 0
+    host.game['turn'] = 'player1'
+    host.car_make_move()
+    for _ in range(60):
+        cli._net_poll()
+        cli.draw()
+        if cli_mix[-1]['pts'][0] != wall_mix['pts'][0]:
+            break
+        time.sleep(0.02)
+    check(cli_mix[-1]['pts'] == wall_mix['pts'],
+          'ход стены при смешанном поле (машинки и стены) одинаковый: %r'
+          % (wall_mix['pts'],),
+          'ходы разошлись: у хоста %r, у клиента %r'
+          % (wall_mix['pts'], cli_mix[-1]['pts']))
+
+
+    # --- 18. туман: чужие фигуры видны только после столкновения ---
+    app = battle_app(cars=1, walls=1, wall_len=2)
+    car = app.car_field('car')['units'][0]
+    wall = app.car_field('wall')['units'][0]
+    check(not app.car_seen(wall, 'L'),
+          'стены соперника на своём поле не видны, пока не врезались',
+          'чужая стена видна на чужом поле и до столкновения')
+    check(app.car_seen(wall, 'R'),
+          'на своём поле защитник свою стену видит',
+          'защитник не видит свою стену')
+    car['pts'] = [(-0.2, 0.4)]
+    car['dir'] = 0
+    app.unit_state['selected'] = car
+    app.car_make_move()
+    check(app.car_seen(wall, 'L'),
+          'после тарана стена соперника становится видна',
+          'стена осталась невидимой после столкновения')
+    check(car.get('revealed'),
+          'таранившая машинка раскрывается тоже',
+          'машинка не раскрылась')
+
+    # машинка соперника видна только когда сама врежется в стену
+    app = battle_app(cars=1, walls=1, wall_len=2)
+    car = app.car_field('car')['units'][0]
+    app.unit_state['selected'] = car
+    check(app.car_seen(car, 'L'),
+          'своя машинка видна всегда',
+          'своя машинка не видна')
+    check(not app.car_seen(car, 'R'),
+          'чужая машинка не видна, пока не врезалась',
+          'чужая машинка видна сразу')
+
+    # --- 19. стены можно ставить прямо во время боя ---
+    # правило: стена ставится только в СВОЙ ход и только одна за ход
+    app = battle_app(cars=1, walls=1, wall_len=2)
+    wf = app.car_field('wall')
+    side = 'L' if wf is app.FL else 'R'
+    app.game['turn'] = app.car_side_of_fld(wf)      # ход защиты
+    before = len(wf['units'])
+    app.car_tap(side, 0.5, -0.5, 1)
+    check(len(wf['units']) == before + 1,
+          'в бою стена ставится на свободную клетку (%d -> %d)'
+          % (before, len(wf['units'])),
+          'стена в бою не поставилась: %d -> %d' % (before, len(wf['units'])))
+    check(app.game['turn'] != app.car_side_of_fld(wf),
+          'после стены ход уходит сопернику (был %s, стал %s)'
+          % (app.car_side_of_fld(wf), app.game['turn']),
+          'ход остался у построившего: %s' % app.game['turn'])
+    n_walls = len(wf['units'])
+    app.game['turn'] = app.car_side_of_fld(wf)      # снова наш ход
+    app.car_tap(side, 0.5, -0.5, 1)
+    check(len(wf['units']) == n_walls,
+          'вторую стену за один ход поставить нельзя',
+          'за один ход поставлено несколько стен: %d -> %d'
+          % (n_walls, len(wf['units'])))
+    app.game['turn'] = 'player2' if app.car_side_of_fld(wf) == 'player1'         else 'player1'
+    app.car_tap(side, 0.6, -0.6, 1)
+    check(len(wf['units']) == n_walls,
+          'в чужой ход стена не ставится',
+          'стена поставлена не в свой ход: %d -> %d'
+          % (n_walls, len(wf['units'])))
+    app.game['turn'] = app.car_side_of_fld(wf)
+    app.car_tap(side, 0.1, 0.1, 1)
+    check(len(wf['units']) == n_walls,
+          'на жёлтый круг стена не ставится',
+          'стена встала на жёлтый круг')
+    for i in range(30):
+        app.game['turn'] = app.car_side_of_fld(wf)
+        app.car_tap(side, 0.7 - 0.1 * (i % 7), -0.7 + 0.1 * (i // 7), 1)
+    check(len(wf['units']) <= 10,
+          'число стен не превышает флот (поставлено %d, осталось %d)'
+          % (len(wf['units']),
+             sum(max(0, v) for v in app.car_remaining(wf)['wall'].values())),
+          'стен больше флота: %d' % len(wf['units']))
+    # против ИИ у экрана есть своё поле: на чужом стена не строится
+    app = battle_app(cars=1, walls=1, wall_len=1, play='ai', human='player2')
+    app.car_human = 'player2'
+    my, other = app.car_field('wall'), app.car_field('car')
+    n_my, n_other = len(my['units']), len(other['units'])
+    app.game['turn'] = 'player2'
+    app.car_tap('L' if other is app.FL else 'R', 0.5, -0.5, 1)
+    check(len(other['units']) == n_other,
+          'на чужом поле стена не строится',
+          'правило своего поля не работает: чужое поле %d->%d, своё %d->%d'
+          % (n_other, len(other['units']), n_my, len(my['units'])))
+    app.game['turn'] = 'player2'
+    app.car_tap('L' if my is app.FL else 'R', 0.5, -0.5, 1)
+    check(len(my['units']) == n_my + 1,
+          'на своём поле стена строится в свой ход (%d -> %d)'
+          % (n_my, len(my['units'])),
+          'на своём поле стена не построилась: %d -> %d'
+          % (n_my, len(my['units'])))
+
+    # --- 20. препятствие вращается ---
+    for cells, d0 in (([(-0.6, 0.2), (-0.5, 0.2), (-0.4, 0.2)], 0),
+                      ([(-0.6, 0.2), (-0.5, 0.2)], 0),
+                      ([(0.2, -0.6), (0.2, -0.5), (0.2, -0.4)], 2)):
+        app = battle_app(cars=1, walls=1, wall_len=len(cells))
+        wall = app.car_field('wall')['units'][0]
+        wall['pts'] = list(cells)
+        wall['size'] = len(cells)
+        wall['dir'] = d0
+        app.unit_state['selected'] = wall
+        app.on_rotate(1)
+        turned = (wall['dir'] != d0 and len(wall['pts']) == len(cells) and
+                  app.car_points_ok(wall['pts'], 'wall',
+                                    app.car_field('wall')['units'],
+                                    ignore=wall))
+        check(turned, '«Поворот» разворачивает препятствие %r -> %r'
+              % (cells, wall['pts']),
+              'препятствие не повернулось: было %r (%d), стало %r (%d)'
+              % (cells, d0, wall['pts'], wall['dir']))
+        app.unit_state['selected'] = wall
+        app.on_rotate(7)          # вместе с первым — полный оборот 360°
+        check(set(wall['pts']) == set(cells) and wall['dir'] == d0,
+              'полный оборот (8 поворотов на 45°) возвращает стену '
+              'на место: %r' % (wall['pts'],),
+              'после полного оборота стена уехала: %r (dir=%d) вместо %r'
+              % (wall['pts'], wall['dir'], cells))
+
+    # --- 21. машинка крупная и ход виден ---
+    app = battle_app(cars=1)
+    car = app.car_field('car')['units'][0]
+    cell_px = GRID * app.br['L'].width * 0.96 / (2 * LIMIT)
+    check(CAR_R >= 2.4 * 0.042,
+          'машинка увеличена в 2.5 раза: радиус %.3f от ширины поля '
+          'против прежних 0.042' % CAR_R,
+          'машинка не увеличена: радиус %.3f от ширины поля' % CAR_R)
+    check(car_draw_radius(app, 'L', car) == max(6, int(CAR_R *
+                                                      app.br['L'].width)),
+          'нарисованный круг машинки соответствует константе (%d px)'
+          % car_draw_radius(app, 'L', car),
+          'нарисованный круг машинки не соответствует константе')
+    check(car_draw_radius(app, 'L', car) > 2 * cell_px,
+          'машинка заметно крупнее клетки: радиус %d px против %.1f px'
+          % (car_draw_radius(app, 'L', car), cell_px),
+          'машинка меньше двух клеток: радиус %d px, клетка %.1f px'
+          % (car_draw_radius(app, 'L', car), cell_px))
+    app.unit_state['selected'] = car
+    car['dir'] = 0
+    app.car_make_move()
+    check(car.get('anim') is not None,
+          'ход машинки показывается плавно (анимация включена)',
+          'после хода анимации нет — движение не видно')
+    app.car_anim_pos(car)
+    car['anim'] = ([(-1.5, 0.9)], 0)
+    check(app.car_anim_pos(car) == car['pts'][0],
+          'анимация заканчивается на новой клетке',
+          'анимация не доходит до новой клетки')
+
+    # --- 21a. у границ квадрата машинка разворачивается ---
+    app = battle_app(cars=1)
+    cf = app.car_field('car')
+    edge = {0: (1.0, 0.0), 1: (0.9, 0.9), 2: (0.0, 1.0), 3: (-0.9, 0.9),
+            4: (-1.0, 0.0), 5: (-0.9, -0.9), 6: (0.0, -1.0), 7: (0.9, -0.9)}
+    bad_dirs = []
+    for d, start in edge.items():
+        cf['units'].clear()
+        app.place_unit(cf, [start], d, 1, 'car')
+        car = cf['units'][0]
+        car['left'] = CAR_STEPS
+        app.unit_state['selected'] = car
+        app.game['turn'] = 'player1'
+        app.car_make_move()
+        if not (car['dir'] == (d + 4) % 8 or car['pts'][0] != start):
+            bad_dirs.append(d)
+    check(not bad_dirs,
+          'у границы квадрата машинка разворачивается на 180° (все 8 '
+          'направлений)',
+          'не развернулись направления: %r' % bad_dirs)
+    cf['units'].clear()
+    app.place_unit(cf, [(1.0, 0.0)], 0, 1, 'car')      # у правой границы
+    car = cf['units'][0]
+    car['left'] = CAR_STEPS
+    app.unit_state['selected'] = car
+    app.game['turn'] = 'player1'
+    app.car_make_move()
+    check(car['pts'][0] == (1.0, 0.0) and car['dir'] == 4,
+          'машинка у границы остаётся на клетке и разворачивается',
+          'у границы: %r, направление %d' % (car['pts'][0], car['dir']))
+    app.game['turn'] = 'player1'
+    app.car_make_move()
+    check(car['pts'][0] == (0.9, 0.0),
+          'после разворота машинка уезжает от границы внутрь: %r'
+          % (car['pts'][0],),
+          'после разворота машинка осталась на месте: %r' % (car['pts'][0],))
+
+    # --- 22. на экране нового режима нет trigonометрии ---
+    app = battle_app(cars=1, walls=1, wall_len=2)
+    seen = []
+    orig = g.blit_text
+
+    def spy(surf, text, *a, **kw):
+        seen.append(text)
+        return orig(surf, text, *a, **kw)
+
+    g.blit_text = spy
+    try:
+        app.draw()
+    finally:
+        g.blit_text = orig
+    bad = [t for t in seen
+           if any(w in t for w in ('Угол', 'Прицел:', 'Режим:', 'Размер:',
+                                   'Огонь:', 'ctg', 'tg2', 'Игрок 1',
+                                   'Игрок 2', 'МОИ ЮНИТЫ', 'сложность:'))]
+    check(not bad,
+          'на экране боя нового режима нет trigonометрических подписей',
+          'остались лишние подписи: %r' % bad[:6])
+    check(any('МАШИНКИ' in t for t in seen) and
+          any('ПРЕПЯТСТВИЯ' in t for t in seen),
+          'на экране есть названия сторон',
+          'нет названий сторон на экране')
 
     print()
     print('Итог: %s' % ('все проверки пройдены' if ok else 'ЕСТЬ ОШИБКИ'))
