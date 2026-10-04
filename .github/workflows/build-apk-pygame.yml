@@ -152,6 +152,13 @@ jobs:
       # P4A_RELEASE_KEYSTORE*; без них он молча собирает APK без
       # подписи (он так и предупреждает: «sign will not be passed»).
       # Значения читаем из spec, чтобы источник был один.
+      # p4a умеет переиспользовать закэшированный dist: рецепты при этом
+      # НЕ выполняются, и в APK попадает старый код игры при зелёной
+      # сборке. Поэтому перед сборкой раскладываем модули прямо в дерево
+      # и пишем манифест с их контрольными суммами.
+      - name: Sync game code into build tree
+        run: python .github/scripts/sync_game_files.py
+
       - name: Build APK (release)
         working-directory: ready_apk
         run: |

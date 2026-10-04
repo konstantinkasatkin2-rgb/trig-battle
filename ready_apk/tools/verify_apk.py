@@ -13,6 +13,7 @@ pygame, но БЕЗ кода игры: приложение стартует и 
 """
 
 import glob
+import hashlib
 import gzip
 import io
 import os
@@ -25,6 +26,66 @@ import zipfile
 REQUIRED = ('main', 'trig_battle_pygame')
 
 
+MANIFEST_NAME = 'build_manifest.txt'
+GAME_MODULES = ('main.py', 'trig_battle_pygame.py', 'profiles.py',
+                'netgame.py')
+
+
+def local_manifest():
+    """-> {имя файла: sha256} для текущего исходника."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out = {}
+    for name in GAME_MODULES:
+        # main.py лежит в каталоге сборки, остальное — в корне репозитория
+        for candidate in (os.path.join(root, name),
+                          os.path.join(root, 'ready_apk', name)):
+            if os.path.exists(candidate):
+                with open(candidate, 'rb') as fd:
+                    out[name] = hashlib.sha256(fd.read()).hexdigest()
+                break
+    return out
+
+
+def check_fresh_code(names, tf):
+    """Свежий ли код игры внутри APK. Ничего не распознано — ругаемся."""
+    packed = [n for n in names if n.endswith('/' + MANIFEST_NAME)]
+    if not packed:
+        print('  НЕТ манифест сборки %s — нечем подтвердить свежесть '
+              'кода' % MANIFEST_NAME)
+        return False
+    text = tf.extractfile(packed[0]).read().decode('utf-8', 'replace')
+    inside = {}
+    for line in text.strip().splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            inside[parts[0]] = parts[1]
+    local = local_manifest()
+    if not inside or not local:
+        print('  НЕ УДАЛОСЬ прочитать манифест')
+        return False
+    stale = []
+    for name, digest in sorted(local.items()):
+        got = inside.get(name)
+        if got is None:
+            print('  НЕТ   %s в манифесте APK' % name)
+            stale.append(name)
+        elif got != digest:
+            print('  СТАРЕЕ %s: в APK %s..., в исходнике %s...'
+                  % (name, got[:12], digest[:12]))
+            stale.append(name)
+        else:
+            print('  ОК    %s совпадает с исходником' % name)
+    if stale:
+        print('  ИТОГ: в APK устаревший код: %s.' % ', '.join(stale))
+        print('        Причина: python-for-android переиспользовал '
+              'закэшированный dist и не выполнил рецепт, который копирует '
+              'код игры.')
+        print('        Соберите заново без кэша дерева (см. sync_game_files.py).')
+        return False
+    return True
+
+
 def verify(apk):
     print('APK: %s (%.1f МБ)' % (os.path.basename(apk),
                                  os.path.getsize(apk) / 1048576))
@@ -33,7 +94,8 @@ def verify(apk):
     if not libs:
         sys.exit('ОШИБКА: в APK нет libpybundle.so (сборка сломана)')
     raw = gzip.decompress(z.read(libs[0]))
-    names = tarfile.open(fileobj=io.BytesIO(raw)).getnames()
+    tf = tarfile.open(fileobj=io.BytesIO(raw))
+    names = tf.getnames()
 
     print('  файлов в бандле: %d' % len(names))
     tops = sorted({n.split('/')[1] for n in names if n.count('/') >= 1})
@@ -77,6 +139,13 @@ def verify(apk):
                or m.endswith('/' + need + '.py')]
         print('  %s %s.py в бандле' % ('OK  ' if hit else 'НЕТ ', need))
         ok = ok and bool(hit)
+
+    # Код внутри APK обязан совпадать с текущим исходником. Такая
+    # проверка нужна потому, что python-forandroid умеет переиспользовать
+    # закэшированный dist: рецепт, копирующий игру, при этом не
+    # выполняется, и в пакет попадает СТАРАЯ версия игры — при зелёной
+    # сборке и полностью рабочем APK предыдущего релиза.
+    ok = check_fresh_code(names, tf) and ok
 
     if not ok:
         sys.exit('\nОШИБКА: игра не попала в APK — приложение не запустится.\n'

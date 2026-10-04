@@ -28,6 +28,7 @@
 приводит к остановке сборки.
 """
 
+import hashlib
 from os.path import abspath, dirname, exists, join
 import shutil
 
@@ -46,6 +47,9 @@ ENTRY_MODULE = 'main.py'
 # Сколько уровней вверх искать модули: рецепт лежит в
 # ready_apk/p4a-recipes/trigbattle_src/, игра — на два уровня выше.
 SEARCH_UP_LEVELS = 3
+
+# Файл с контрольными суммами модулей, попавших в APK.
+MANIFEST_NAME = 'build_manifest.txt'
 
 
 def arch_name(arch):
@@ -97,6 +101,15 @@ class TrigbattleSrcRecipe(Recipe):
                     levels=SEARCH_UP_LEVELS)
         )
 
+    def should_build(self, arch):
+        """Всегда True.
+
+        p4a пропускает сборку рецепта, если считает его уже собранным, а
+        тогда код игры в бандле остаётся прежним. Копирование файлов
+        стоит мгновенно, пропускать его нельзя.
+        """
+        return True
+
     def prepare_build_dir(self, arch):
         # Базовый Recipe пытается распаковать архив (self.unpack), но у
         # этого рецепта нет ни url, ни source_dir — распаковывать нечего.
@@ -110,6 +123,20 @@ class TrigbattleSrcRecipe(Recipe):
             path = self.find_module(module)
             shutil.copy(path, join(dest, module))
             info('trigbattle_src: {} -> {}'.format(module, dest))
+        # Манифест сборки: контрольные суммы файлов, которые попали в APK.
+        # По нему tools/verify_apk.py ловит случай, когда внутрь пакета
+        # положен устаревший код (например, p4a переиспользовала
+        # закэшированный dist и не выполнила этот рецепт).
+        manifest = join(dest, MANIFEST_NAME)
+        rows = []
+        for module in (ENTRY_MODULE,) + GAME_MODULES:
+            src = self.find_module(module)
+            with open(src, 'rb') as fd:
+                rows.append('%s %s' % (module, hashlib.sha256(
+                    fd.read()).hexdigest()))
+        with open(manifest, 'w', encoding='utf-8') as fd:
+            fd.write('\n'.join(rows) + '\n')
+        info('trigbattle_src: {} записан'.format(MANIFEST_NAME))
 
 
 # python-for-android загружает рецепт и достаёт из модуля ИМЕННО объект с
