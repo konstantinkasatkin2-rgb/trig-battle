@@ -148,9 +148,25 @@ jobs:
       #     ставится поверх старой, а Google Play не считает приложение
       #     подозрительным (debug-подпись каждый раз разная);
       #   * APK меньше и быстрее собирается (символы вырезаются).
+      # p4a берёт ключ подписи НЕ из spec, а из переменных окружения
+      # P4A_RELEASE_KEYSTORE*; без них он молча собирает APK без
+      # подписи (он так и предупреждает: «sign will not be passed»).
+      # Значения читаем из spec, чтобы источник был один.
       - name: Build APK (release)
         working-directory: ready_apk
-        run: buildozer android release
+        run: |
+          set -euo pipefail
+          spec_get() { grep -E "^$1[[:space:]]*=" buildozer.spec | head -1 | cut -d= -f2- | tr -d " "; }
+          KEYSTORE="$PWD/$(spec_get android.keystore)"
+          if [ ! -f "$KEYSTORE" ]; then echo "НЕТ файла ключа: $KEYSTORE"; exit 1; fi
+          {
+            echo "P4A_RELEASE_KEYSTORE=$KEYSTORE"
+            echo "P4A_RELEASE_KEYSTORE_PASSWD=$(spec_get android.storepassword)"
+            echo "P4A_RELEASE_KEYALIAS=$(spec_get android.keyalias)"
+            echo "P4A_RELEASE_KEYALIAS_PASSWD=$(spec_get android.keypassword)"
+          } >> "$GITHUB_ENV"
+          echo "ключ подписи: $KEYSTORE"
+          buildozer android release
 
       # buildozer называет файл package-version-arch-debug.apk.
       # Собираем из него один файл с понятным именем: <package>_<version>.apk
@@ -170,6 +186,27 @@ jobs:
           echo "Итоговый файл: dist/${NAME}_${VER}.apk"
           ls -lh dist
 
+      # Проверка, что игра реально попала внутрь APK: без неё приложение
+      # стартует и мгновенно закрывается (именно так вёл себя APK 0.2.0)
+      - name: Verify game files inside APK
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          python3 tools/verify_apk.py dist/*.apk
+
+      # Проверка линковки .so. Именно так проявился баг pygame под Android:
+      # сборка зелёная, а на телефоне падает dlopen из-за символа
+      # alphablit_alpha_sse2_argb_surf_alpha. Теперь такой APK не уйдёт
+      # дальше по конвейеру.
+      - name: Verify ELF symbols inside APK
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          python3 tools/verify_elf.py dist/*.apk
+
+      # upload-artifact выполняется и при провале проверки выше: нужен
+      # файл, чтобы разобрать бандл и понять, что именно не попало внутрь.
+      # Статус прогона при этом остаётся failed — красный.
       # Ключ подписи не должен меняться: иначе Android требует сначала
       # удалить старую версию, а Google Play считает приложение
       # подозрительным. Сверяем блок подписи из самого APK — так не нужен
@@ -201,27 +238,6 @@ jobs:
             echo "подпись совпадает с предыдущими сборками"
           fi
 
-      # Проверка, что игра реально попала внутрь APK: без неё приложение
-      # стартует и мгновенно закрывается (именно так вёл себя APK 0.2.0)
-      - name: Verify game files inside APK
-        working-directory: ready_apk
-        run: |
-          set -euo pipefail
-          python3 tools/verify_apk.py dist/*.apk
-
-      # Проверка линковки .so. Именно так проявился баг pygame под Android:
-      # сборка зелёная, а на телефоне падает dlopen из-за символа
-      # alphablit_alpha_sse2_argb_surf_alpha. Теперь такой APK не уйдёт
-      # дальше по конвейеру.
-      - name: Verify ELF symbols inside APK
-        working-directory: ready_apk
-        run: |
-          set -euo pipefail
-          python3 tools/verify_elf.py dist/*.apk
-
-      # upload-artifact выполняется и при провале проверки выше: нужен
-      # файл, чтобы разобрать бандл и понять, что именно не попало внутрь.
-      # Статус прогона при этом остаётся failed — красный.
       - name: Upload APK
         if: always()
         uses: actions/upload-artifact@v4
