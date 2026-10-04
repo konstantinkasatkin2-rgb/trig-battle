@@ -22,7 +22,21 @@ import sys
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(ROOT, 'dist')
 BUILD = os.path.join(ROOT, 'build_exe')
-EXE_NAME = 'Тригонометрический морской бой'
+# Версия попадает в имя файла: иначе пересборка падает, если старая
+# копия ещё запущена (Windows держит файл занятым).
+def _version():
+    spec = os.path.join(ROOT, 'ready_apk', 'buildozer.spec')
+    try:
+        with open(spec, encoding='utf-8') as fd:
+            for line in fd:
+                if line.startswith('version'):
+                    return line.split('=')[1].strip()
+    except OSError:
+        pass
+    return '0.0'
+
+
+EXE_NAME = 'Тригонометрический морской бой %s' % _version()
 
 # Что входит в сборку: игра, точка входа и библиотеки профилей/сети.
 GAME_SOURCES = ['trig_battle_pygame.py', 'netgame.py', 'profiles.py']
