@@ -2978,7 +2978,12 @@ class TrigBattle:
             self.update_angles()
         elif kind == 'ready':
             self.net_peer_ready = True
-            self.FR['units'] = netgame.decode_fleet(msg.get('units'))
+            self.FR['units'] = []
+            for un in netgame.decode_fleet(msg.get('units')):
+                # fld — ссылка на наше поле соперника: без неё отрисовка
+                # и подсчёт оставшихся кораблей не работают
+                un['fld'] = self.FR
+                self.FR['units'].append(un)
             self.FR['misses'].clear()
             self.FR['hints'].clear()
             self._net_maybe_start()

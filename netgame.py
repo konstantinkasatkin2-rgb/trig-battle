@@ -385,25 +385,45 @@ class Client(_Peer):
 
 
 # ---------------- формат флота ----------------
+# Юнит в игре — это словарь с полями type/size/dir/pts/hits/fld/visible.
+# По сети передаём всё, кроме fld (это ссылка на локальное поле) и hits
+# (отметки о попаданиях считаются у каждого свои). Раньше передавались
+# только точки, и принимающая сторона падала с KeyError: 'type' на
+# отрисовке чужого флота.
 def encode_fleet(units):
-    """Флот -> список юнитов, каждый = список точек [[x, y], ...].
-
-    Координаты округляются: по сети идёт текст, а 6 знаков за глазами
-    достаточно (HIT_TOL заметно больше).
-    """
+    """Флот -> список [тип, размер, направление, [[x, y], ...]]."""
     out = []
     for un in units:
-        out.append([[round(float(p[0]), 6), round(float(p[1]), 6)]
-                    for p in un.get('pts', [])])
+        out.append([str(un.get('type', 'ship')),
+                    int(un.get('size', len(un.get('pts', [])))),
+                    int(un.get('dir', 0)),
+                    [[round(float(p[0]), 6), round(float(p[1]), 6)]
+                     for p in un.get('pts', [])]])
     return out
 
 
 def decode_fleet(payload):
-    """Обратное преобразование в список юнитов с ключом `pts`."""
+    """Обратное преобразование.
+
+    Возвращает готовые юниты; поле `fld` проставляет принимающая сторона
+    (указатель на её собственное поле соперника).
+    """
     units = []
-    for pts in payload or []:
-        units.append({'pts': [(float(p[0]), float(p[1])) for p in pts],
-                      'hits': set()})
+    for item in payload or []:
+        try:
+            utype, size, dir_idx, pts = item
+        except (TypeError, ValueError):
+            continue
+        points = [(float(p[0]), float(p[1])) for p in pts]
+        if not points:
+            continue
+        units.append({'type': str(utype),
+                      'size': int(size) or len(points),
+                      'dir': int(dir_idx),
+                      'pts': points,
+                      'hits': set(),
+                      'visible': True,
+                      'fld': None})
     return units
 
 

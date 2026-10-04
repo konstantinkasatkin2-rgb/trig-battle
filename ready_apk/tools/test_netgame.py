@@ -40,11 +40,19 @@ def check(cond, ok_msg, fail_msg):
 
 
 def pump(app, seconds):
-    """Крутит игровой цикл игрока, чтобы он обрабатывал сеть."""
+    """Крутит игровой цикл игрока, чтобы он обрабатывал сеть.
+
+    Обязательно рисует кадр: сеть проверяется вместе с отрисовкой.
+    Раньше тест гонял только протокол, и из-за этого пропустил ошибку
+    KeyError: 'type' — на телефоне приложение падало при получении
+    флота соперника, потому что принимались одни координаты, а рисовальщик
+    ждал ещё тип, размер и направление.
+    """
     end = time.time() + seconds
     while time.time() < end:
         if app.net is not None:
             app._net_poll()
+        app.draw()
         pygame.event.pump()
         time.sleep(0.01)
 
@@ -80,6 +88,8 @@ def main():
     for _ in range(150):
         host._net_poll()
         cli._net_poll()
+        host.draw()          # рисуем на каждом шаге: ловим падения отрисовки
+        cli.draw()
         if host.net_state == 'connected' and cli.net_state == 'connected':
             break
         time.sleep(0.02)
@@ -108,6 +118,8 @@ def main():
     for _ in range(120):
         host._net_poll()
         cli._net_poll()
+        host.draw()
+        cli.draw()
         if host.game['phase'] == 'battle' and cli.game['phase'] == 'battle':
             break
         time.sleep(0.02)
@@ -119,6 +131,17 @@ def main():
           'каждый получил флот соперника',
           'флот соперника не пришёл (хост=%d, клиент=%d)'
           % (len(host.FR['units']), len(cli.FR['units'])))
+    # Юниты соперника должны быть такими же полными, как свои: рисовальщик
+    # читает type/size/dir/pts/hits/fld/visible. Раньше приходили только
+    # координаты, и приложение падало с KeyError: 'type'.
+    need_keys = {'type', 'size', 'dir', 'pts', 'hits', 'fld', 'visible'}
+    for who, app_ in (('хост', host), ('клиент', cli)):
+        for un in app_.FR['units']:
+            missing = need_keys - set(un)
+            check(not missing,
+                  'у %s юниты соперника полные' % who,
+                  'у %s в юните не хватает: %s' % (who, sorted(missing)))
+            break
     check(host.game['turn'] == host._net_my_turn(),
           'первым ходит хост', 'первым ходит не тот, кто создал игру')
 
@@ -127,6 +150,7 @@ def main():
     host.on_slider(1)
     for _ in range(60):
         cli._net_poll()
+        cli.draw()
         if abs(cli.s1 - 37.0) < 0.01:
             break
         time.sleep(0.02)
@@ -143,6 +167,7 @@ def main():
     host._net_fire()
     for _ in range(120):
         cli._net_poll()
+        cli.draw()
         hit = any((0.50, 0.50) in un['hits'] for un in cli.FL['units'])
         if hit or cli.game['phase'] == 'over':
             break
@@ -163,6 +188,7 @@ def main():
     host._net_fire()
     for _ in range(120):
         cli._net_poll()
+        cli.draw()
         if cli.game['turn'] == cli._net_my_turn():
             break
         time.sleep(0.02)
@@ -182,6 +208,7 @@ def main():
     cli._net_fire()
     for _ in range(120):
         host._net_poll()
+        host.draw()
         if host.game['turn'] == host._net_my_turn():
             break
         time.sleep(0.02)
@@ -196,6 +223,8 @@ def main():
         for _ in range(150):
             cli._net_poll()
             host._net_poll()
+            cli.draw()
+            host.draw()
             if host.game['phase'] == 'over' and cli.game['phase'] == 'over':
                 break
             time.sleep(0.02)
