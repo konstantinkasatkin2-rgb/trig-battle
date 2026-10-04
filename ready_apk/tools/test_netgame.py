@@ -146,60 +146,43 @@ def main():
     check(host.game['turn'] == host._net_my_turn(),
           'первым ходит хост', 'первым ходит не тот, кто создал игру')
 
-    # --- 3. синхронизация углов ---
+    # --- 3. углы: у каждого игрока своя пара, синхронизации нет ---
+    # У каждого свои два угла: один под синусы/косинусы, другой под
+    # тангенсы/котангенсы. Соперник шлёт только точку выстрела, поэтому
+    # его углы на нашем экране не появляются и не могут сдвинуть наш
+    # прицел — это и было причиной жалобы на «хаотичный» угол.
     host.set_angle1(37)
-    host.on_slider(1)
+    host.set_angle2(120)
+    cli_s1, cli_s2 = cli.s1, cli.s2
     for _ in range(60):
         cli._net_poll()
         cli.draw()
-        if abs(cli.s1 - 37.0) < 0.01:
-            break
         time.sleep(0.02)
-    check(abs(cli.s1 - 37.0) < 0.01,
-          'угол соперника синхронизирован (%.1f)' % cli.s1,
-          'угол не пришёл (у клиента %.1f)' % cli.s1)
+    check(abs(host.s1 - 37.0) < 0.01 and abs(host.s2 - 120.0) < 0.01,
+          'оба угла хоста меняются независимо (%.0f°, %.0f°)'
+          % (host.s1, host.s2),
+          'у хоста углы не настроились: %.0f°, %.0f°' % (host.s1, host.s2))
+    check(abs(cli.s1 - cli_s1) < 0.01 and abs(cli.s2 - cli_s2) < 0.01,
+          'углы соперника не приходят к нам (%.0f°, %.0f°)' % (cli.s1, cli.s2),
+          'чужие углы переписали наши: %.0f°->%.0f°, %.0f°->%.0f°'
+          % (cli_s1, cli.s1, cli_s2, cli.s2))
 
-    # --- 3b. каждый настраивает только СВОЙ угол ---
-    # Проверяем то, что жаловались: угол соперника двигался у нас на экране
-    # сам, произвольно, и тянул прицел в сторону.
-    check(host.net_my_angle() == 1 and cli.net_my_angle() == 2,
-          'свой угол у каждого свой (хост=1, клиент=2)',
-          'свои углы не разведены: хост=%s, клиент=%s'
-          % (host.net_my_angle(), cli.net_my_angle()))
+    # Сообщение с углами может прийти только от старой версии игры:
+    # принимать его нельзя.
+    cli._net_handle({'t': 'angles', 'n': 1, 'a': 200.0})
+    check(abs(cli.s1 - cli_s1) < 0.01,
+          'углы из сообщения старой версии игнорируются',
+          'сообщение старой версии переписало наш угол: %.0f° -> %.0f°'
+          % (cli_s1, cli.s1))
 
-    my_before = cli.s2
-    cli._net_handle({'t': 'angles', 'n': cli.net_my_angle(), 'a': 200.0})
-    check(cli.s2 == my_before and abs(cli.s1 - 37.0) < 0.01,
-          'сообщение с НАШИМ углом игнорируется',
-          'чужое сообщение переписало наш угол: s2 %.1f -> %.1f'
-          % (my_before, cli.s2))
+    cli.set_angle1(64)
+    cli.set_angle2(15)
+    check(abs(cli.s1 - 64.0) < 0.01 and abs(cli.s2 - 15.0) < 0.01,
+          'оба угла клиента меняются независимо (%.0f°, %.0f°)'
+          % (cli.s1, cli.s2),
+          'у клиента углы не настроились: %.0f°, %.0f°' % (cli.s1, cli.s2))
 
-    host._net_handle({'t': 'angles', 'n': 2, 'a': 123.0})
-    check(abs(host.s2 - 123.0) < 0.01 and abs(host.s1 - 37.0) < 0.01,
-          'угол соперника принят в его ползунок, наш не тронут',
-          'угол соперника принят неверно: s1=%.1f s2=%.1f'
-          % (host.s1, host.s2))
-
-    s1_before = cli.s1
-    cli.set_angle1(11.0)
-    check(abs(cli.s1 - s1_before) < 0.01,
-          'попытка сдвинуть чужой угол 1 проигнорирована',
-          'клиент сдвинул чужой угол 1: %.1f -> %.1f'
-          % (s1_before, cli.s1))
-
-    cli.set_angle2(70.0)
-    for _ in range(60):
-        host._net_poll()
-        host.draw()
-        if abs(host.s2 - 70.0) < 0.01:
-            break
-        time.sleep(0.02)
-    check(abs(host.s2 - 70.0) < 0.01 and abs(host.s1 - 37.0) < 0.01,
-          'угол клиента доехал до хоста (%.1f), наш не сбит' % host.s2,
-          'угол клиента не доехал или сбил наш: s1=%.1f s2=%.1f'
-          % (host.s1, host.s2))
-
-    # --- 3c. скрытность: поле, флот и прицел соперника ---
+    # --- 3b. скрытность: поле, флот и точка прицела соперника ---
     # Своё поле видно всегда, чужое — только потопленные корабли.
     for who, app_ in (('хост', host), ('клиент', cli)):
         own = app_.FL['units'][0]
@@ -216,41 +199,55 @@ def main():
               'у %s не виден потопленный корабль соперника' % who)
         app_.FR['units'][0]['hits'] = set()
 
-    # Чужие элементы управления скрыты: ползунок угла, поля tg/ctg (или
-    # sin/cos), кнопки выбора угла и точки выстрела.
-    for who, app_, mine in (('хост', host, 1), ('клиент', cli, 2)):
-        groups = [all(w.visible for w in app_.row_angles[(mine - 1) * 3:
-                                                        mine * 3]),
-                  not any(w.visible for w in app_.row_angles[
-                      (2 - mine) * 3:(2 - mine) * 3 + 3])]
-        check(all(groups), 'у %s виден только свой ползунок угла' % who,
-              'у %s ползунки углов видны неверно: %r' % (who, groups))
-        mine_f = (app_.f_sin, app_.f_cos) if mine == 1 else \
-            (app_.f_tg, app_.f_ctg)
-        foe_f = (app_.f_tg, app_.f_ctg) if mine == 1 else \
-            (app_.f_sin, app_.f_cos)
-        check(all(w.visible for w in mine_f) and
-              not any(w.visible for w in foe_f),
-              'у %s числовые поля — только свои' % who,
-              'у %s числовые fields показаны неверно' % who)
-        check(not any(w.visible for w in (app_.btn_aim1, app_.btn_aim2,
-                                          app_.btn_shot1, app_.btn_shot2)),
-              'у %s выбор чужого угла и прицела скрыт' % who,
-              'у %s кнопки выбора угла/прицела не скрыты' % who)
+    # У каждого своя точка выстрела: хост целится по P1, клиент — по P2.
+    # Точка соперника не рисуется, какая бы она ни была.
+    check(host.point_is_mine('P1') and not host.point_is_mine('P2'),
+          'у хоста своя точка P1, точка соперника скрыта',
+          'у хоста точки определены неверно')
+    check(cli.point_is_mine('P2') and not cli.point_is_mine('P1'),
+          'у клиента своя точка P2, точка соперника скрыта',
+          'у клиента точки определены неверно')
 
-    # После выхода из сетевой игры все элементы управления возвращаются.
+    # И на экране рисуется ровно одна точка — своя. Проверяем по факту
+    # отрисовки, а не по признаку: звезда соперника должна отсутствовать.
+    for who, app_, mine in (('хост', host, 'P1'), ('клиент', cli, 'P2')):
+        app_.state['P1'] = (0.31, 0.42)
+        app_.state['P2'] = (-0.17, 0.28)
+        app_.set_shot(mine)
+        app_.draw()
+        drawn = list(app_.aim_points_drawn)
+        check(drawn == [mine],
+              'у %s на поле нарисована только своя точка %s (нарисовано %r)'
+              % (who, mine, drawn),
+              'у %s нарисованы чужие точки: %r' % (who, drawn))
+
+    # Оба угла и оба поля — свои, поэтому на экране они все на месте.
+    # Прячем только выбор точки выстрела: по сети она задана.
+    for who, app_ in (('хост', host), ('клиент', cli)):
+        check(all(w.visible for w in app_.row_angles[:6]),
+              'у %s оба ползунка углов на месте' % who,
+              'у %s ползунки углов скрыты' % who)
+        check(all(w.visible for w in (app_.f_sin, app_.f_cos,
+                                      app_.f_tg, app_.f_ctg)),
+              'у %s все поля ввода угла на месте' % who,
+              'у %s часть полей ввода угла скрыта' % who)
+        check(app_.btn_aim1.visible and app_.btn_aim2.visible,
+              'у %s выбор угла для поля доступен' % who,
+              'у %s кнопки выбора угла скрыты' % who)
+        check(not app_.btn_shot1.visible and not app_.btn_shot2.visible,
+              'у %s выбор точки выстрела скрыт' % who,
+              'у %s виден выбор чужой точки выстрела' % who)
+
+    # После выхода из сетевой игры кнопки точки выстрела возвращаются.
     # Роль и режим временно меняем «в памяти», соединение не трогаем — ниже
     # ещё нужен полный бой.
     saved_mode = cli.game['mode']
     cli.game['mode'] = 'local'
     cli.net_role = None
     cli._net_widgets_apply()
-    check(all(w.visible for w in cli.row_angles) and
-          all(w.visible for w in (cli.f_sin, cli.f_cos, cli.f_tg, cli.f_ctg,
-                                  cli.btn_aim1, cli.btn_aim2,
-                                  cli.btn_shot1, cli.btn_shot2)),
-          'после выхода из сети элементы управления на месте',
-          'после выхода из сети часть управления пропала')
+    check(cli.btn_shot1.visible and cli.btn_shot2.visible,
+          'после выхода из сети кнопки огня на месте',
+          'после выхода из сети кнопки огня пропали')
     cli.game['mode'] = saved_mode
     cli.net_role = 'client'
     cli._net_widgets_apply()

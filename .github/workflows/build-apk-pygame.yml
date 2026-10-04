@@ -157,6 +157,13 @@ jobs:
         working-directory: ready_apk
         run: python tools/test_sync_game_files.py
 
+      # Игра альбомная: в книжном окне она раньше падала. Проверяем, что
+      # холст всегда альбомный, касания пересчитываются, а разбор
+      # кнопок переживает узкий экран.
+      - name: "Sanity check (книжная ориентация и кнопка профиля)"
+        working-directory: ready_apk
+        run: python tools/test_portrait.py
+
       # Обратный контроль: проверки сетевой игры обязаны падать, если
       # вернуть старый код (чужой угол принимался в любой ползунок,
       # флот соперника был виден). Иначе «зелёные» тесты ничего не
@@ -214,6 +221,18 @@ jobs:
           echo "apkname=${NAME}_${VER}" >> "$GITHUB_OUTPUT"
           echo "Итоговый файл: dist/${NAME}_${VER}.apk"
           ls -lh dist
+
+      # Манифест обязан фиксировать альбомную ориентацию. Значение
+      # screenOrientation хранится в бинарном XML ЧИСЛОМ, поэтому просто
+      # прочитать манифест как текст нельзя — нужен разбор.
+      - name: Проверка ориентации в манифесте
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(bin/*.apk)
+          python tools/manifest_attrs.py "${apks[0]}" | tee /tmp/orient.txt
+          grep -q 'landscape' /tmp/orient.txt
 
       # Проверка, что игра реально попала внутрь APK: без неё приложение
       # стартует и мгновенно закрывается (именно так вёл себя APK 0.2.0)

@@ -843,10 +843,14 @@ class TextKeypad(Widget):
 class TrigBattle:
     def __init__(self):
         pygame.display.set_caption('Тригонометрический морской бой')
+        self.force_landscape()
         self.win = self.open_display()
         self.layout(self.win.get_width(), self.win.get_height())
-        print('[trigbattle] окно %dx%d, u=%.2f, видеодрайвер: %s'
-              % (self.W, self.H, self.u,
+        print('[trigbattle] окно %dx%d%s, холст %dx%d, u=%.2f, '
+              'видеодрайвер: %s'
+              % (self.win_size[0], self.win_size[1],
+                 ' (повёрнуто)' if self.rotated else '',
+                 self.W, self.H, self.u,
                  os.environ.get('SDL_VIDEODRIVER', 'по умолчанию')),
               flush=True)
         self.clock = pygame.time.Clock()
@@ -925,8 +929,18 @@ class TrigBattle:
     # =========================================================
     #  РАСКЛАДКА: пересчитывается под реальный размер окна
     # =========================================================
-    def layout(self, w, h):
-        """Пересчитать все прямоугольники под окно w x h."""
+    def layout(self, win_w, win_h):
+        """Пересчитать все прямоугольники под окно win_w x win_h.
+
+        Игра альбомная. Если система всё же отдала книжное окно, холст
+        строится в повёрнутых (переставленных) размерах и выводится
+        повёрнутым на 90°, а касания пересчитываются обратно. Играть
+        можно в любой ориентации — просто приложение само выбирает
+        альбомную.
+        """
+        self.win_size = (int(win_w), int(win_h))
+        self.rotated = win_h > win_w
+        w, h = (win_h, win_w) if self.rotated else (win_w, win_h)
         w = max(MIN_W, int(w))
         h = max(MIN_H, int(h))
         u = clamp(h / float(DESIGN_H), 0.60, 3.0)   # масштаб элементов
@@ -985,6 +999,29 @@ class TrigBattle:
         self.layout(w, h)
         self.build_ui()          # виджеты пересоздаются под новый размер
         self.update_angles()
+
+    def force_landscape(self):
+        """Просит Android поставить окно в альбомную ориентацию.
+
+        Манифест уже содержит screenOrientation=landscape, но некоторые
+        прошивки и планшеты всё равно отдают книжное окно. Здесь мы
+        обращаемся к активности напрямую. На ПК модуля jnius нет — это
+        не ошибка, там ориентацию задаёт окно.
+        """
+        if os.environ.get('SDL_VIDEODRIVER') == 'dummy':
+            return
+        try:
+            from jnius import autoclass
+        except ImportError:
+            return
+        try:
+            activity = autoclass('org.kivy.android.PythonActivity').mActivity
+            # ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            activity.setRequestedOrientation(0)
+            print('[trigbattle] ориентация запрошена альбомная', flush=True)
+        except Exception as e:            # noqa: BLE001
+            print('[trigbattle] не удалось задать ориентацию: %r' % (e,),
+                  flush=True)
 
     # =========================================================
     #  СОЗДАНИЕ ОКНА (с подстраховкой для телефонов)
@@ -1048,16 +1085,28 @@ class TrigBattle:
 
     def present(self):
         # холст рисуется в размер окна, поэтому просто копируем без
-        # масштабирования (текст остаётся чётким на любом DPI/экране)
+        # масштабирования (текст остаётся чётким на любом DPI/экране).
+        # В книжном окне холст повёрнут: rotate(90) даёт ровно размер окна.
         ww, wh = self.win.get_size()
-        if (ww, wh) != (self.W, self.H):
+        if (ww, wh) != self.win_size:
             self.resize(ww, wh)
             self.draw()
-        self.win.blit(self.base, (0, 0))
+        if self.rotated:
+            self.win.blit(pygame.transform.rotate(self.base, 90), (0, 0))
+        else:
+            self.win.blit(self.base, (0, 0))
         pygame.display.flip()
 
     def to_design(self, pos):
-        return pos                    # холст == окно, координаты совпадают
+        """Экранные координаты -> координаты холста.
+
+        При повёрнутом выводе холст шириной W и высотой H показан на
+        окне W'=H, H'=W: точка холста (cx, cy) оказывается в окне в
+        точке (cy, W - 1 - cx). Отсюда обратное преобразование.
+        """
+        if not self.rotated:
+            return pos                # холст == окно, координаты совпадают
+        return (self.W - 1 - pos[1], pos[0])
 
     # =========================================================
     #  СОБЫТИЯ
@@ -1213,18 +1262,14 @@ class TrigBattle:
                 self.delete_selected()
         # точная подстройка углов
         if k == pygame.K_LEFT:
-            self.set_angle_my(self._ang_val() - 1)
+            self.sliders[self.aim_sel - 1].bump(-1)
         elif k == pygame.K_RIGHT:
-            self.set_angle_my(self._ang_val() + 1)
-
-    def _ang_val(self):
-        """Значение «своего» угла: по сети — своего, локально — активного."""
-        n = self.net_my_angle() if self.net_active() else self.aim_sel
-        return self.s1 if n == 1 else self.s2
+            self.sliders[self.aim_sel - 1].bump(1)
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
+            self.force_landscape()
             info = pygame.display.Info()
             self.win = pygame.display.set_mode((info.current_w, info.current_h),
                                               pygame.FULLSCREEN)
@@ -1355,29 +1400,23 @@ class TrigBattle:
     #  ПРИЦЕЛ
     # =========================================================
     def set_angle1(self, v, exact=False):
-        """Угол 1. По сети чужой угол не трогаем — его настраивает соперник."""
-        if self.net_active() and self.net_my_angle() != 1:
-            return
         self.sliders[0].set(v, exact)
 
     def set_angle2(self, v, exact=False):
-        """Угол 2. По сети чужой угол не трогаем — его настраивает соперник."""
-        if self.net_active() and self.net_my_angle() != 2:
-            return
         self.sliders[1].set(v, exact)
 
     def set_angle_slot(self, slot, v, exact=False):
-        """Ставим угол по номеру ползунка (1 — «Угол 1», 2 — «Угол 2»)."""
+        """Ставим угол по номеру ползунка (1 — «Угол 1», 2 — «Угол 2»).
+
+        Оба угла принадлежат тому, кто играет: у каждого игрока свой угол
+        для синусов/косинусов и свой угол для тангенсов/котангенсов.
+        По сети соперник присылает нам только координаты выстрела, так
+        что его углы на нашем экране не появляются вовсе.
+        """
         if slot == 1:
             self.set_angle1(v, exact)
         else:
             self.set_angle2(v, exact)
-
-    def set_angle_my(self, v, exact=False):
-        """Ставим «свой» угол: по сети — свой, локально — выбранный."""
-        self.set_angle_slot(self.net_my_angle()
-                            if self.net_active() else self.aim_sel,
-                            v, exact)
 
     def on_slider(self, which):
         """Ползунок изменился -> обновляем углы и точки P1/P2."""
@@ -1386,12 +1425,9 @@ class TrigBattle:
         else:
             self.s2 = self.sliders[1].value
         self.update_angles()
-        if self.net_active():
-            # шлём сопернику только свой угол
-            if which != self.net_my_angle():
-                return
-            self.net.send({'t': 'angles', 'n': which,
-                           'a': round(self.sliders[which - 1].value, 4)})
+        # По сети углы НЕ отправляются: у соперника своя пара углов, и
+        # его значения не должны двигать наш прицел. Сопернику мы тоже
+        # шлём только точку выстрела.
 
     def update_angles(self):
         a1, a2 = math.radians(self.s1), math.radians(self.s2)
@@ -1889,13 +1925,16 @@ class TrigBattle:
         if key == 'boardL':
             return self.br['L']
         if key == 'start':
-            return self.btn_start.rect
+            return self.btn_start.rect if self.btn_start else None
         if key == 'fire':
-            return self.btn_move.rect
+            return self.btn_move.rect if self.btn_move else None
         if key == 'mode':
-            return self.btn_mode_ships.rect.union(self.btn_mode_planes.rect)
+            if self.btn_mode_ships and self.btn_mode_planes:
+                return self.btn_mode_ships.rect.union(
+                    self.btn_mode_planes.rect)
+            return None
         if key == 'rotate':
-            return self.btn_rotate.rect
+            return self.btn_rotate.rect if self.btn_rotate else None
         return None
 
     def tut_next(self):
@@ -2044,17 +2083,22 @@ class TrigBattle:
         for btn, mn in ((self.btn_mode_angles, 'angles'),
                         (self.btn_mode_ships, 'ships'),
                         (self.btn_mode_planes, 'planes')):
-            btn.active = (mn == name)
+            if btn is not None:
+                btn.active = (mn == name)
 
     def set_shot(self, p):
         self.shot_sel['p'] = p
-        self.btn_shot1.active = (p == 'P1')
-        self.btn_shot2.active = (p == 'P2')
+        if self.btn_shot1:
+            self.btn_shot1.active = (p == 'P1')
+        if self.btn_shot2:
+            self.btn_shot2.active = (p == 'P2')
 
     def set_aim_sel(self, n):
         self.aim_sel = n
-        self.btn_aim1.active = (n == 1)
-        self.btn_aim2.active = (n == 2)
+        if self.btn_aim1:
+            self.btn_aim1.active = (n == 1)
+        if self.btn_aim2:
+            self.btn_aim2.active = (n == 2)
 
     def set_size(self, s):
         self.unit_state['size'] = s
@@ -2096,7 +2140,10 @@ class TrigBattle:
             if phase == 'down':
                 self.drag_side = side
                 self.drag_btn = btn
-            self.set_angle_my(math.degrees(math.atan2(dy, dx)) % 360)
+            if self.drag_btn == 3 or self.aim_sel == 2:
+                self.set_angle2(math.degrees(math.atan2(dy, dx)) % 360)
+            else:
+                self.set_angle1(math.degrees(math.atan2(dy, dx)) % 360)
             return
 
         fld = self.build_fld()
@@ -2230,28 +2277,17 @@ class TrigBattle:
         y3, h3 = self.R3
         y4, h4 = self.R4
         # --- ряд 1: углы и выбор прицела ---
-        # По сети показываем только свой угол: чужой настраивает соперник.
-        net = self.net_active()
-        mine = self.net_my_angle() if net else 0
+        # Оба угла свои — в том числе по сети, поэтому подписи и значения
+        # выглядят как обычно.
         for i, gx in enumerate(self.ang_x):
-            if net and i + 1 != mine:
-                continue
-            lbl = 'Угол %d, °' % (i + 1) if not net else 'ВАШ УГОЛ, °'
-            blit_text(s, lbl, (gx, y1 + int(2 * u)),
+            blit_text(s, 'Угол %d, °' % (i + 1), (gx, y1 + int(2 * u)),
                       int(14 * u), BLACK, 'lt', True)
-        if net:
-            a = self.s1 if mine == 1 else self.s2
-            blit_text(s, '%.1f°' % a, (self.ang_val[mine - 1], y1 + h1 // 2),
-                      int(17 * u), PURPLE if mine == 1 else DKORANGE,
-                      'mm', True)
-        else:
-            blit_text(s, '%.1f°' % self.s1, (self.ang_val[0], y1 + h1 // 2),
-                      int(17 * u), PURPLE, 'mm', True)
-            blit_text(s, '%.1f°' % self.s2, (self.ang_val[1], y1 + h1 // 2),
-                      int(17 * u), DKORANGE, 'mm', True)
-        if not net:
-            blit_text(s, 'Прицел:', (self.aim_x, y1 + h1 // 2), int(14 * u),
-                      BLACK, 'lm', True)
+        blit_text(s, '%.1f°' % self.s1, (self.ang_val[0], y1 + h1 // 2),
+                  int(17 * u), PURPLE, 'mm', True)
+        blit_text(s, '%.1f°' % self.s2, (self.ang_val[1], y1 + h1 // 2),
+                  int(17 * u), DKORANGE, 'mm', True)
+        blit_text(s, 'Прицел:', (self.aim_x, y1 + h1 // 2), int(14 * u),
+                  BLACK, 'lm', True)
         hint1 = 'тяните пальцем по полю'
         if self.hint1_x + text_size(hint1, int(13 * u))[0] < self.W - self.M:
             blit_text(s, hint1, (self.hint1_x, y1 + h1 // 2), int(13 * u),
@@ -2532,49 +2568,44 @@ class TrigBattle:
         sc = R.width * 0.96 / (2 * LIMIT)
         lw = max(2, int(3 * u))
 
-        # По сети у каждого игрока только своя половина расчёта: свой угол,
-        # своя точка выстрела. Чужой угол настраивает соперник, поэтому
-        # его луч, подписи и точка скрыты.
+        # Оба угла и обе точки считаются из НАШИХ углов, поэтому и луч угла 1,
+        # и луч угла 2, и подписи sin/cos/tg/ctg — свои. Скрывается
+        # ровно одно: точка выстрела соперника (звезда, подпись и
+        # числа) и её проекция.
         net = self.net_active()
-        mine = self.net_my_angle() if net else 0
-        my_a1 = not net or mine == 1
-        my_a2 = not net or mine == 2
+        on1 = self.shot_sel['p'] == 'P1'
+        # Какие точки реально нарисованы — для проверок и отладки: по
+        # одному только point_is_mine() нельзя отличить нарисованную
+        # звезду соперника от скрытой.
+        self.aim_points_drawn = []
 
         # --- угол 1 ---
-        if my_a1:
-            pygame.draw.line(s, PURPLE, px(0, 0), px(c1, s1), lw)
-            pygame.draw.circle(s, PURPLE,
-                               (int(px(c1, s1)[0]), int(px(c1, s1)[1])),
-                               max(4, int(6 * u)))
-            pc = faint(BLUE, FADE + 0.15)
-            pygame.draw.line(s, pc, px(c1, 0), px(c1, s1), max(1, int(2 * u)))
-            pygame.draw.line(s, pc, px(0, s1), px(c1, s1), max(1, int(2 * u)))
-            blit_text(s, 'cos = %.2f' % c1,
-                      (px(c1, 0)[0] - 6 * u, px(0, 0)[1] + 14 * u),
-                      max(9, int(11 * u)), pc, 'rm')
-            blit_text(s, 'sin = %.2f' % s1,
-                      (px(0, 0)[0] - 10 * u, px(0, s1)[1]),
-                      max(9, int(11 * u)), pc, 'rm')
+        pygame.draw.line(s, PURPLE, px(0, 0), px(c1, s1), lw)
+        pygame.draw.circle(s, PURPLE, (int(px(c1, s1)[0]), int(px(c1, s1)[1])),
+                           max(4, int(6 * u)))
+        pc = faint(BLUE, FADE + 0.15)
+        pygame.draw.line(s, pc, px(c1, 0), px(c1, s1), max(1, int(2 * u)))
+        pygame.draw.line(s, pc, px(0, s1), px(c1, s1), max(1, int(2 * u)))
+        blit_text(s, 'cos = %.2f' % c1,
+                  (px(c1, 0)[0] - 6 * u, px(0, 0)[1] + 14 * u),
+                  max(9, int(11 * u)), pc, 'rm')
+        blit_text(s, 'sin = %.2f' % s1,
+                  (px(0, 0)[0] - 10 * u, px(0, s1)[1]),
+                  max(9, int(11 * u)), pc, 'rm')
 
         # --- угол 2 ---
-        if my_a2:
-            pygame.draw.line(s, DKORANGE, px(0, 0), px(c2, s2), lw)
-            p2 = px(c2, s2)
-            d = max(5, int(7 * u))
-            pygame.draw.polygon(s, DKORANGE,
-                                [(p2[0], p2[1] - d), (p2[0] + d, p2[1]),
-                                 (p2[0], p2[1] + d), (p2[0] - d, p2[1])],
-                                max(1, int(2 * u)))
-            pc2 = faint(DGRAY, FADE + 0.15)
-            pygame.draw.line(s, pc2, px(c2, 0), px(c2, s2),
-                             max(1, int(2 * u)))
-            pygame.draw.line(s, pc2, px(0, s2), px(c2, s2),
-                             max(1, int(2 * u)))
+        pygame.draw.line(s, DKORANGE, px(0, 0), px(c2, s2), lw)
+        p2 = px(c2, s2)
+        d = max(5, int(7 * u))
+        pygame.draw.polygon(s, DKORANGE, [(p2[0], p2[1] - d), (p2[0] + d, p2[1]),
+                                          (p2[0], p2[1] + d), (p2[0] - d, p2[1])],
+                            max(1, int(2 * u)))
+        pc2 = faint(DGRAY, FADE + 0.15)
+        pygame.draw.line(s, pc2, px(c2, 0), px(c2, s2), max(1, int(2 * u)))
+        pygame.draw.line(s, pc2, px(0, s2), px(c2, s2), max(1, int(2 * u)))
 
         # --- лучи tg/ctg до границы квадрата ---
-        for c, sn, my in ((c1, s1, my_a1), (c2, s2, my_a2)):
-            if not my:
-                continue
+        for c, sn in ((c1, s1), (c2, s2)):
             m = max(abs(c), abs(sn))
             if m > 0:
                 bx, by = c / m, sn / m
@@ -2584,13 +2615,13 @@ class TrigBattle:
                                  max(1, int(2 * u)))
 
         # --- маркеры на осях tg/ctg ---
-        if tg2 is not None and my_a2:
+        if tg2 is not None:
             fx, fy = px(1, clamp(tg2, -LIMIT, LIMIT))
             q = max(3, int(4 * u))
             pygame.draw.rect(s, faint(RED, FADE),
                              (int(fx) - q, int(fy) - q, 2 * q, 2 * q),
                              max(1, int(2 * u)))
-        if ctg2 is not None and my_a2:
+        if ctg2 is not None:
             fx, fy = px(clamp(ctg2, -LIMIT, LIMIT), 1)
             draw_triangle(s, faint(GREEN, FADE), fx, fy, max(4, int(6 * u)),
                           max(1, int(2 * u)))
@@ -2599,15 +2630,16 @@ class TrigBattle:
         # Подпись ставится НАД точкой и мелким шрифтом, чтобы не закрывать её.
         lbl_size = max(8, int(10 * u))
         star_r = max(7, int(10 * u))
-        on1 = self.shot_sel['p'] == 'P1'
-        if self.state['P1'] is not None and (not net or on1):
+        if self.state['P1'] is not None and self.point_is_mine('P1'):
+            self.aim_points_drawn.append('P1')
             Px, Py = self.state['P1']
             fx, fy = px(Px, Py)
             col = BLACK if on1 else mix(WHITE, BLACK, 0.25)
             draw_star(s, col, fx, fy, star_r, max(2, int(2 * u)))
             self.aim_label(s, 'P1 = (%.2f, %.2f)' % (Px, Py), fx, fy, R,
                            col, lbl_size)
-        if self.state['P2'] is not None and not (net and on1):
+        if self.state['P2'] is not None and self.point_is_mine('P2'):
+            self.aim_points_drawn.append('P2')
             Qx, Qy = self.state['P2']
             fx, fy = px(Qx, Qy)
             col = DGREEN if not on1 else mix(WHITE, DGREEN, 0.25)
@@ -2615,12 +2647,12 @@ class TrigBattle:
             self.aim_label(s, 'P2 = (%.2f, %.2f)' % (Qx, Qy), fx, fy, R,
                            col, lbl_size)
 
-        # --- соединительные проекции (только к своей точке) ---
+        # --- соединительные проекции (по сети — только к своей точке) ---
         if tg2 is not None and (not net or on1):
             Py = clamp(tg2 * c1, -1.0, 1.0)
             pygame.draw.line(s, faint(PURPLE, FADE), px(c1, s1), px(c1, Py),
                              max(1, int(2 * u)))
-        if ctg2 is not None and not (net and on1):
+        if ctg2 is not None and (not net or not on1):
             Qx = clamp(ctg2 * s1, -1.0, 1.0)
             pygame.draw.line(s, faint(DKORANGE, FADE), px(c1, s1), px(Qx, s1),
                              max(1, int(2 * u)))
@@ -2631,23 +2663,16 @@ class TrigBattle:
             else 'нет'
         p2s = ('(%.2f, %.2f)' % self.state['P2']) if self.state['P2'] \
             else 'нет'
-        if net:
-            # по сети показываем только свой угол и свою точку
-            if on1:
-                lines = ['угол 1 = %5.1f°' % self.s1,
-                         '  sin=%s cos=%s' % (f(s1), f(c1)),
-                         'P1 = ' + p1s]
-            else:
-                lines = ['угол 2 = %5.1f°' % self.s2,
-                         '  tg =%s ctg=%s' % (f(tg2), f(ctg2)),
-                         'P2 = ' + p2s]
-        else:
-            lines = ['угол 1 = %5.1f°' % self.s1,
-                     '  sin=%s cos=%s' % (f(s1), f(c1)),
-                     'угол 2 = %5.1f°' % self.s2,
-                     '  tg =%s ctg=%s' % (f(tg2), f(ctg2)),
-                     'P1 = ' + p1s,
-                     'P2 = ' + p2s]
+        # Оба угла — свои, показываем оба. Чужая точка выстрела не
+        # показывается ни координатами, ни строкой.
+        lines = ['угол 1 = %5.1f°' % self.s1,
+                 '  sin=%s cos=%s' % (f(s1), f(c1)),
+                 'угол 2 = %5.1f°' % self.s2,
+                 '  tg =%s ctg=%s' % (f(tg2), f(ctg2))]
+        if self.point_is_mine('P1'):
+            lines.append('P1 = ' + p1s)
+        if self.point_is_mine('P2'):
+            lines.append('P2 = ' + p2s)
         text_box(s, lines, (R.right - 6 * self.u, R.y + 6 * self.u),
                  max(9, int(12 * u)), BLACK, WHITE,
                  BORDER, 'rt', False, None, 235, int(5 * self.u))
@@ -2937,29 +2962,24 @@ class TrigBattle:
         """Идёт ли игра по сети: режим net и назначенная роль."""
         return self.game['mode'] == 'net' and self.net_role is not None
 
-    def net_my_angle(self):
-        """Номер «своего» угла: хост настраивает первый, клиент — второй."""
-        return 1 if self._net_my_turn() == 'player1' else 2
+    def point_is_mine(self, point):
+        """Эта точка выстрела — моя? По сети у каждого своя точка:
+        хост целится по P1, клиент — по P2. Точка соперника не рисуется
+        и не показывается в числах, какой бы она ни была."""
+        if not self.net_active():
+            return True
+        return point == ('P1' if self._net_my_turn() == 'player1' else 'P2')
 
     def _net_widgets_apply(self):
-        """По сети показываем только СВОИ элементы управления.
+        """По сети убираем выбор точки выстрела.
 
-        Чужой угол, поля sin/cos или tg/ctg и выбор прицела соперника
-        скрыты: настраивает их он, а не мы. В локальной игре все
-        элементы на месте, как прежде.
+        Оба угла и оба поля ввода остаются: они свои. Прячем только
+        кнопки «Огонь P1/P2» — по сети точка выстрела задана тем, за
+        кого играешь, выбирать её нельзя.
         """
         net = self.net_active()
-        mine = self.net_my_angle() if net else 0
-        # ползунки с кнопками −/+ занимают в row_angles по три места
-        for i in (1, 2):
-            for w in self.row_angles[(i - 1) * 3:i * 3]:
-                w.visible = not net or i == mine
-        for w, slot in ((self.f_sin, 1), (self.f_cos, 1),
-                        (self.f_tg, 2), (self.f_ctg, 2)):
-            w.visible = not net or slot == mine
-        for w in (self.btn_aim1, self.btn_aim2,
-                  self.btn_shot1, self.btn_shot2):
-            w.visible = not net
+        self.btn_shot1.visible = not net
+        self.btn_shot2.visible = not net
 
     def net_start_host(self):
         """Создать игру: получаем код, ждём соперника."""
@@ -3104,22 +3124,12 @@ class TrigBattle:
             else:
                 self.set_msg('Соперник: %s' % nick, DGREEN)
         elif kind == 'angles':
-            # соперник прислал СВОЙ угол — кладём его в чужой ползунок.
-            # Свой угол не трогаем: иначе движение соперника дёргало бы
-            # наш прицел, и выстрел уходил бы в случайную точку.
-            try:
-                slot = int(msg.get('n'))
-                val = float(msg.get('a'))
-            except (TypeError, ValueError):
-                return
-            if slot not in (1, 2) or slot == self.net_my_angle():
-                return
-            self.sliders[slot - 1].set(val, exact=True)
-            if slot == 1:
-                self.s1 = self.sliders[0].value
-            else:
-                self.s2 = self.sliders[1].value
-            self.update_angles()
+            # Углы больше не синхронизируются: у каждого игрока своя
+            # пара углов. Сообщение приходит только от старой версии
+            # игры — принимать его нельзя, иначе чужой угол утащит наш
+            # прицел (такое и было причиной жалоб).
+            print('[trigbattle] соперник прислал углы — игнорирую, '
+                  'у нас свои', flush=True)
         elif kind == 'ready':
             self.net_peer_ready = True
             self.FR['units'] = []
@@ -3304,8 +3314,9 @@ class TrigBattle:
                               label, cb, color, int(size * u), bold))
             return lst[-1]
 
-        # Кнопка профиля живёт в левом верхнем углу КАЖДОГО экрана меню:
-        # по ней вход/регистрация, ник и статистика.
+        # Кнопка профиля — только в ГЛАВНОМ меню (левый верхний угол):
+        # по ней вход/регистрация, ник и статистика. На остальных
+        # экранах её нет, чтобы не мешала.
         def add_profile(lst):
             if self.profile_db is None:
                 return
@@ -3372,15 +3383,12 @@ class TrigBattle:
             'Игра по сети', lambda: self.show_screen('net'), LTGREEN, 24)
         back(diff)
         self.screens['difficulty'] = diff
-        add_profile(diff)
 
         # --- правила / обратная связь ---
         self.screens['rules'] = []
         back(self.screens['rules'])
         self.screens['feedback'] = []
         back(self.screens['feedback'])
-        add_profile(self.screens['rules'])
-        add_profile(self.screens['feedback'])
 
         # --- настройки ---
         ch = int(clamp(0.06 * H, 30, 46))
@@ -3406,7 +3414,6 @@ class TrigBattle:
         ]
         back(sett)
         self.screens['settings'] = sett
-        add_profile(sett)
 
         # --- победа ---
         vic = []
@@ -3416,12 +3423,11 @@ class TrigBattle:
         btn(vic, cx - bw / 2, y + bh + int(0.02 * H), bw, bh, 'В меню',
             lambda: self.show_screen('menu'), (210, 210, 210), 22)
         self.screens['victory'] = vic
-        add_profile(vic)
 
-        self.build_profile_ui(btn, add_profile, form_field, back, cx, bw, bh)
+        self.build_profile_ui(btn, form_field, back, cx, bw, bh)
 
     # ---------------- ЭКРАНЫ ПРОФИЛЕЙ И СЕТИ ----------------
-    def build_profile_ui(self, btn, add_profile, form_field, back, cx, bw, bh):
+    def build_profile_ui(self, btn, form_field, back, cx, bw, bh):
         u, W, H = self.u, self.W, self.H
         fw = int(clamp(0.46 * W, 260, 620))       # ширина полей формы
         fh = int(clamp(0.072 * H, 34, 66))
@@ -3442,7 +3448,6 @@ class TrigBattle:
             'Регистрация', lambda: self.show_screen('register'), LTSKY, 20)
         back(lg)
         self.screens['login'] = lg
-        add_profile(lg)
 
         # --- регистрация ---
         rg = []
@@ -3463,7 +3468,6 @@ class TrigBattle:
             lambda: self.show_screen('login'), (215, 215, 215), 17)
         back(rg)
         self.screens['register'] = rg
-        add_profile(rg)
 
         # --- профиль (вошедший) ---
         pf = []
@@ -3477,7 +3481,6 @@ class TrigBattle:
             LTRED, 20)
         back(pf)
         self.screens['profile'] = pf
-        add_profile(pf)
 
         # --- сеть: что делать ---
         nt = []
@@ -3492,7 +3495,6 @@ class TrigBattle:
             lambda: self.show_screen('net_ip'), LAVENDER, 20)
         back(nt)
         self.screens['net'] = nt
-        add_profile(nt)
 
         # --- хост: показ кода ---
         nh = []
@@ -3500,7 +3502,6 @@ class TrigBattle:
         btn(nh, fx, int(0.62 * H), fw, bh, 'Отмена', self.net_cancel,
             LTRED, 20)
         self.screens['net_host'] = nh
-        add_profile(nh)
 
         # --- клиент: ввод кода ---
         nj = []
@@ -3513,7 +3514,6 @@ class TrigBattle:
         btn(nj, fx, yj, fw, bh, 'Отмена', self.net_cancel, LTRED, 20)
         back(nj)
         self.screens['net_join'] = nj
-        add_profile(nj)
 
         # --- клиент: ввод IP ---
         ni = []
@@ -3525,7 +3525,6 @@ class TrigBattle:
         btn(ni, fx, yi, fw, bh, 'Отмена', self.net_cancel, LTRED, 20)
         back(ni)
         self.screens['net_ip'] = ni
-        add_profile(ni)
 
     def make_buttons(self, y, h, specs, x0, gap, limit):
         """Кнопки в ряд с авто-шириной по тексту; optional-кнопки отбрасываются,
@@ -3619,10 +3618,15 @@ class TrigBattle:
                        MODE_COLORS['ships'], f16, True, True, False),
                       ('Самолёты', lambda: self.set_mode('planes'),
                        MODE_COLORS['planes'], f16, True, True, False)]
-        self.btn_mode_angles, self.btn_mode_ships, self.btn_mode_planes = \
-            self.make_buttons(y3 + (h3 - small) // 2, small, mode_specs, x,
-                              gap, self.W - M)[0]
-        x = self.btn_mode_planes.rect.right + gap
+        modes, _ = self.make_buttons(y3 + (h3 - small) // 2, small,
+                                     mode_specs, x, gap, self.W - M)
+        # на узком экране кнопок режима может не хватить — разбор без
+        # падения (см. ряд 4)
+        modes = list(modes) + [None] * (3 - len(modes))
+        (self.btn_mode_angles, self.btn_mode_ships,
+         self.btn_mode_planes) = modes
+        x = (self.btn_mode_planes.rect.right if self.btn_mode_planes
+             else x) + gap
         self.size_lab_x = x
         x += font(f14, True).size('Размер:')[0] + gap
         self.size_buttons = []
@@ -3640,9 +3644,14 @@ class TrigBattle:
             ('Удалить', self.delete_selected, LTRED, f16, True, False, False),
             ('Очистить всё', self.clear_field, (215, 215, 215), f16, False,
              False, True)], x, gap, self.W - M)
+        # «Очистить всё» необязательная и на узком экране исчезает — разбор без
+        # падения (см. ряд 4)
+        rest = list(rest) + [None] * (3 - len(rest))
         self.btn_rotate, self.btn_del, self.btn_clear = rest
-        self.row_build = [self.btn_mode_angles, self.btn_mode_ships,
-                          self.btn_mode_planes] + self.size_buttons + rest
+        self.row_build = [b for b in (self.btn_mode_angles, self.btn_mode_ships,
+                                     self.btn_mode_planes) if b is not None]
+        self.row_build += self.size_buttons + [b for b in rest
+                                               if b is not None]
 
         # ---------------- ряд 4: бой ----------------
         fire_lbl = font(f14, True).size('Огонь:')[0] + gap
@@ -3665,15 +3674,22 @@ class TrigBattle:
                   False, False, True)]
         btns, _ = self.make_buttons(y4 + (h4 - small) // 2, small, specs, x,
                                     gap, self.W - M)
+        # Кнопки-«необязательные» отбрасываются на узких экранах, поэтому
+        # список может оказаться короче: недостающие заменяем пустышками,
+        # иначе приложение падает с ValueError при разборе (в книжной
+        # ориентации это и происходило).
+        btns = list(btns) + [None] * (8 - len(btns))
         (self.btn_shot1, self.btn_shot2, self.btn_move, self.btn_start,
          self.btn_menu, self.btn_tut_next, self.btn_tut_skip,
          self.btn_reset_ang) = btns
-        self.btn_tut_next.visible = False
-        self.btn_tut_skip.visible = False
+        for b in (self.btn_tut_next, self.btn_tut_skip):
+            if b is not None:
+                b.visible = False
         if self.tutorial['active']:         # кнопки туториала на месте
-            self.btn_tut_next.visible = True
-            self.btn_tut_skip.visible = True
-        self.row_battle = btns
+            for b in (self.btn_tut_next, self.btn_tut_skip):
+                if b is not None:
+                    b.visible = True
+        self.row_battle = [b for b in btns if b is not None]
 
         self.game_widgets = (self.row_angles + self.row_build +
                              self.row_battle)
@@ -3687,11 +3703,8 @@ class TrigBattle:
         self.tut_hl = getattr(self, 'tut_hl', None)
 
     def reset_angles(self):
-        if self.net_active():
-            # по сети сбрасываем только свой угол: чужой не наш
-            self.set_angle_my(ANGLE1_0 if self.net_my_angle() == 1
-                              else ANGLE2_0)
-            return
+        # Оба угла свои — в том числе по сети: соперник присылает только
+        # точку выстрела, углы у каждого свои.
         self.sliders[0].set(ANGLE1_0)
         self.sliders[1].set(ANGLE2_0)
 
