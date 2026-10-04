@@ -152,6 +152,24 @@ jobs:
         working-directory: ready_apk
         run: buildozer android release
 
+      # buildozer называет файл package-version-arch-debug.apk.
+      # Собираем из него один файл с понятным именем: <package>_<version>.apk
+      - name: Prepare artifact
+        id: prepare
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          NAME=$(grep -E '^package\.name' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          VER=$(grep -E '^version' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          mkdir -p dist
+          shopt -s nullglob
+          apks=(bin/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then echo "APK не собран!"; exit 1; fi
+          cp "${apks[0]}" "dist/${NAME}_${VER}.apk"
+          echo "apkname=${NAME}_${VER}" >> "$GITHUB_OUTPUT"
+          echo "Итоговый файл: dist/${NAME}_${VER}.apk"
+          ls -lh dist
+
       # Ключ подписи не должен меняться: иначе Android потребует сначала
       # удалить старую версию, а установка будет выглядеть подозрительно.
       - name: Check signing certificate
@@ -173,24 +191,6 @@ jobs:
           else
             echo "подпись совпадает с предыдущими сборками"
           fi
-
-      # buildozer называет файл package-version-arch-debug.apk.
-      # Собираем из него один файл с понятным именем: <package>_<version>.apk
-      - name: Prepare artifact
-        id: prepare
-        working-directory: ready_apk
-        run: |
-          set -euo pipefail
-          NAME=$(grep -E '^package\.name' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
-          VER=$(grep -E '^version' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
-          mkdir -p dist
-          shopt -s nullglob
-          apks=(bin/*.apk)
-          if [ ${#apks[@]} -eq 0 ]; then echo "APK не собран!"; exit 1; fi
-          cp "${apks[0]}" "dist/${NAME}_${VER}.apk"
-          echo "apkname=${NAME}_${VER}" >> "$GITHUB_OUTPUT"
-          echo "Итоговый файл: dist/${NAME}_${VER}.apk"
-          ls -lh dist
 
       # Проверка, что игра реально попала внутрь APK: без неё приложение
       # стартует и мгновенно закрывается (именно так вёл себя APK 0.2.0)
