@@ -170,23 +170,32 @@ jobs:
           echo "Итоговый файл: dist/${NAME}_${VER}.apk"
           ls -lh dist
 
-      # Ключ подписи не должен меняться: иначе Android потребует сначала
-      # удалить старую версию, а установка будет выглядеть подозрительно.
+      # Ключ подписи не должен меняться: иначе Android требует сначала
+      # удалить старую версию, а Google Play считает приложение
+      # подозрительным. Сверяем блок подписи из самого APK — так не нужен
+      # apksigner и не зависит от версии SDK.
       - name: Check signing certificate
         working-directory: ready_apk
         run: |
           set -euo pipefail
-          APKSIGNER=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
-          echo "apksigner: $APKSIGNER"
-          CERT=$("$APKSIGNER" verify --print-certs dist/*.apk | grep -i "SHA-256 digest" | head -1 | sed 's/.*digest: //')
-          echo "отпечаток сертификата: $CERT"
+          APK=$(ls -1 dist/*.apk | head -1)
+          echo "APK: $APK"
+          SIG=$(unzip -Z1 "$APK" | grep -E '^META-INF/.*\.(RSA|DSA|EC)$' | head -1)
+          if [ -z "$SIG" ]; then
+            echo "ОШИБКА: в APK нет блока подписи — он не подписан?"
+            exit 1
+          fi
+          echo "блок подписи: $SIG"
+          CERT=$(unzip -p "$APK" "$SIG" | sha256sum | cut -d' ' -f1)
+          echo "хеш сертификата: $CERT"
           if [ ! -f expected_cert.txt ]; then
             echo "$CERT" > expected_cert.txt
-            echo "отпечаток сохранён в expected_cert.txt — следующие сборки"
-            echo "обязаны им подписываться"
+            echo "сохранён в expected_cert.txt; следующие сборки обязаны"
+            echo "им подписываться, иначе обновление поверх старой версии"
+            echo "перестанет работать"
           elif ! grep -qF "$CERT" expected_cert.txt; then
-            echo "ОШИБКА: APK подписан другим ключом, чем предыдущие сборки."
-            echo "Пользователь не сможет обновиться поверх старой версии."
+            echo "ОШИБКА: APK подписан другим ключом, чем предыдущие сборки"
+            echo "пользователь не сможет обновиться поверх старой версии"
             exit 1
           else
             echo "подпись совпадает с предыдущими сборками"
