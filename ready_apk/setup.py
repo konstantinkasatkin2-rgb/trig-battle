@@ -15,7 +15,7 @@ from setuptools import setup
 
 setup(
     name='trigbattle',
-    version='0.2.2',
+    version='0.2.3',
     description='Тригонометрический морской бой (pygame)',
     # игра и её точка входа — обычные модули верхнего уровня
     py_modules=['main', 'trig_battle_pygame'],

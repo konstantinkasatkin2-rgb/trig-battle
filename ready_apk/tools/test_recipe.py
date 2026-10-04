@@ -7,30 +7,33 @@
 падать при запуске. Поэтому проверяем его поведение прямо здесь,
 подменяя pythonforandroid заглушками:
 
-  1) рецепт находит каталог с main.py / trig_battle_pygame.py;
-  2) build_arch кладёт оба файла в site-packages целевой сборки;
-  3) если файлов игры нет — рецепт ПАДАЕТ, а не собирает APK без игры.
+  1) рецепт находит main.py в каталоге сборки и игру с библиотеками —
+     в корне репозитория (модули лежат в разных каталогах);
+  2) build_arch кладёт все четыре модуля в site-packages сборки;
+  3) если какого-то файла нет — рецепт ПАДАЕТ, а не собирает APK без
+     игры.
 
 Запуск:  python tools/test_recipe.py
 """
 
 import importlib.util
 import os
-import shutil
 import sys
 import tempfile
+import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECIPE = os.path.join(HERE, os.pardir, 'p4a-recipes', 'trigbattle_src',
                       '__init__.py')
+MODULES = ('main.py', 'trig_battle_pygame.py', 'profiles.py', 'netgame.py')
 
 
-def load_recipe_with_stubs(tmp):
-    """Импортирует рецепт, подменив pythonforandroid заглушками."""
-    pkg = type(sys)('pythonforandroid')
+def load_recipe_with_stubs():
+    """Импортирует рецепт, подменяя pythonforandroid заглушками."""
+    pkg = types.ModuleType('pythonforandroid')
     pkg.__path__ = []
-    recipe_mod = type(sys)('pythonforandroid.recipe')
-    util_mod = type(sys)('pythonforandroid.util')
+    recipe_mod = types.ModuleType('pythonforandroid.recipe')
+    util_mod = types.ModuleType('pythonforandroid.util')
 
     class Recipe(object):
         def __init__(self):
@@ -78,7 +81,7 @@ def check(cond, ok_msg, fail_msg):
 def main():
     ok = True
     print('Проверка рецепта trigbattle_src')
-    mod, Ctx = load_recipe_with_stubs(None)
+    mod, Ctx = load_recipe_with_stubs()
 
     # --- проверка 0: p4a достаёт из модуля объект с именем `recipe`.
     #     Именно на этом уже падал рецепт: класс был назван иначе, и
@@ -91,57 +94,61 @@ def main():
     ok &= check(isinstance(obj, mod.Recipe), 'recipe — экземпляр Recipe',
                 'recipe не является экземпляром Recipe')
 
-    # --- случай 1: раскладка как в репозитории — игра в корне проекта,
-    #     рецепт в <корень>/p4a-recipes/trigbattle_src
+    # --- случай 1: раскладка как в репозитории —
+    #     ready_apk/main.py и корень с игрой и библиотеками
     with tempfile.TemporaryDirectory() as tmp:
-        app = os.path.join(tmp, 'ready_apk')
+        root = os.path.join(tmp, 'repo')
+        app = os.path.join(root, 'ready_apk')
         recipes = os.path.join(app, 'p4a-recipes')
         rdir = os.path.join(recipes, 'trigbattle_src')
         os.makedirs(rdir)
-        src = app
+        with open(os.path.join(app, 'main.py'), 'w', encoding='utf-8') as fd:
+            fd.write('# main\n')
         for name in mod.GAME_MODULES:
-            with open(os.path.join(src, name), 'w', encoding='utf-8') as fd:
+            with open(os.path.join(root, name), 'w', encoding='utf-8') as fd:
                 fd.write('# ' + name + '\n')
 
         site = os.path.join(tmp, 'site-packages')
-        r = mod.recipe          # берём ровно тот объект, который возьмёт p4a
+        r = obj               # берём ровно тот объект, который возьмёт p4a
         r.ctx = Ctx(recipes, site)
 
         # p4a вызывает методы с РАЗНЫМИ типами аргумента:
         #     prepare_build_dir(arch.arch) -> строка
         #     build_arch(arch)             -> объект Arch
         arch_str = 'arm64-v8a'
-        arch_obj = type('Arch', (), {'arch': arch_str})()
+        arch_obj = types.SimpleNamespace(arch=arch_str)
         try:
             r.prepare_build_dir(arch_str)
             r.build_arch(arch_obj)
-            # и наоборот тоже должно работать
             r.prepare_build_dir(arch_obj)
             r.build_arch(arch_str)
             ok &= check(True, 'принимает и строку, и объект Arch', '')
         except Exception as e:                                # noqa: BLE001
             ok &= check(False, '', 'не пережил вызов p4a: %r' % (e,))
 
-        print(' случай 1: игра в корне проекта, рецепт в p4a-recipes/')
-        for name in mod.GAME_MODULES:
+        print(' случай 1: main.py в сборке, игра и библиотеки в корне')
+        for name in MODULES:
             got = os.path.join(site, 'arm64-v8a', name)
             ok &= check(os.path.exists(got), '%s -> site-packages' % name,
                         '%s НЕ скопирован' % name)
 
-    # --- случай 2: файлов игры нет -> должно быть исключение, а не
-    #     тихая сборка APK без игры
+    # --- случай 2: забыли библиотеку -> падаем, а не собираем APK без неё
     with tempfile.TemporaryDirectory() as tmp:
-        recipes = os.path.join(tmp, 'p4a-recipes')
-        os.makedirs(os.path.join(recipes, 'trigbattle_src'))
-        r = mod.recipe          # берём ровно тот объект, который возьмёт p4a
+        app = os.path.join(tmp, 'ready_apk')
+        recipes = os.path.join(app, 'p4a-recipes')
+        rdir = os.path.join(recipes, 'trigbattle_src')
+        os.makedirs(rdir)
+        with open(os.path.join(app, 'main.py'), 'w', encoding='utf-8') as fd:
+            fd.write('# main\n')
+        r = obj
         r.ctx = Ctx(recipes, os.path.join(tmp, 'site-packages'))
-        print(' случай 2: файлов игры нет')
+        print(' случай 2: нет netgame.py (забыли скопировать модуль)')
         try:
-            r.build_arch(type('Arch', (), {'arch': 'arm64-v8a'})())
+            r.build_arch(types.SimpleNamespace(arch='arm64-v8a'))
             ok &= check(False, '', 'ожидалась ошибка, а сборка прошла '
                                    'без файлов игры')
         except RuntimeError as e:
-            ok &= check('не найдены файлы игры' in str(e), str(e)[:60],
+            ok &= check('не найден файл' in str(e), str(e)[:58],
                         'не то сообщение об ошибке')
 
     print('Итог: ' + ('все проверки пройдены' if ok else 'ЕСТЬ ОШИБКИ'))

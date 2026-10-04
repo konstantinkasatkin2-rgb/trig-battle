@@ -42,11 +42,19 @@
     импортирован, но нигде не использовался; авторизация — только
     в kivy-версии android/main.py).
 
+Новое (профили и игра по сети):
+  * профили: регистрация по электронной почте, вход, смена никнейма,
+    статистика. Кнопка профиля — в левом верхнем углу каждого экрана
+    меню. База — SQLite в каталоге `dtb` (см. profiles.py).
+  * игра по локальной сети: хост раздаёт код из пяти символов, второй
+    игрок подключается либо по коду (широковещательный поиск), либо по
+    IP. Транспорт и протокол — в netgame.py.
+
 Запуск:
     pip install pygame
     python trig_battle_pygame.py
 
-Сборка APK: см. buildozer-pygame.spec рядом с этим файлом.
+Сборка APK: см. buildozer.spec в каталоге ready_apk.
 """
 
 import glob
@@ -56,6 +64,19 @@ import random
 import sys
 
 import pygame
+
+# Профили и сетевая игра — отдельные модули, чтобы их можно было
+# положить в APK вместе с игрой. Импорт не должен ронять игру целиком:
+# если модуля нет (например, старая копия файла), работаем без
+# профилей и без сети, а не падаем на старте.
+try:
+    import profiles
+except Exception:                       # noqa: BLE001 - играем и без профилей
+    profiles = None
+try:
+    import netgame
+except Exception:                       # noqa: BLE001 - сеть необязательна
+    netgame = None
 
 # ===================== КОНСТАНТЫ ИГРЫ =====================
 
@@ -484,16 +505,34 @@ class Slider(Widget):
 
 
 class Field(Widget):
-    """Поле ввода числа (аналог matplotlib TextBox)."""
+    """Поле ввода. По умолчанию — число (аналог matplotlib TextBox).
 
-    def __init__(self, rect, label, getter, on_submit, size=18):
+    Для email/пароля/ника задаётся `charset`: он же определяет, что
+    принимает экранная клавиатура.
+    """
+
+    NUMERIC = '0123456789.-'
+    TEXT = ("abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._-")
+
+    def __init__(self, rect, label, getter, on_submit, size=18,
+                 charset=None, max_len=8, text_keypad=False, masked=False):
         self.rect = pygame.Rect(rect)
         self.label = label
         self.size = size
         self.getter = getter          # -> текущий текст (из значения угла)
         self.on_submit = on_submit    # (строка) -> нормализованный текст
+        self.charset = charset or self.NUMERIC
+        self.max_len = max_len
+        # текстовым полям нужна клавиатура с буквами и замаскированный ввод
+        self.text_keypad = text_keypad
+        self.masked = masked
         self.text = ''
         self.focused = False
+
+    def display_text(self):
+        """Что показать: у пароля вместо символов точки."""
+        return '*' * len(self.text) if self.masked else self.text
 
     def draw(self, surf):
         if not self.visible:
@@ -505,8 +544,8 @@ class Field(Widget):
         pygame.draw.rect(surf, GOLD if self.focused else WHITE, self.rect)
         pygame.draw.rect(surf, DKORANGE if self.focused else BORDER,
                          self.rect, 2 if self.focused else 1)
-        txt = self.text if self.focused else self.getter()
-        blit_text(surf, txt, self.rect.center, self.size, BLACK, 'mm',
+        shown = self.display_text() if self.focused else self.getter()
+        blit_text(surf, shown, self.rect.center, self.size, BLACK, 'mm',
                   self.focused)
         if self.focused:
             blit_text(surf, '|', (self.rect.right - int(self.size * 0.6),
@@ -514,6 +553,8 @@ class Field(Widget):
                       self.size, DKORANGE, 'mt', True)
 
     def press(self):
+        # Всегда начинаем с пустого поля: если подставить текущее
+        # значение угла, то ввод «0.2» допишется к нему («450.2»).
         self.focused = True
         self.text = ''
 
@@ -521,18 +562,21 @@ class Field(Widget):
         if ch == BACKSPACE:
             self.text = self.text[:-1]
             return
-        if ch == '±':                      # смена знака
+        if ch == '±' and '±' in self.charset:
             self.text = self.text[1:] if self.text.startswith('-') \
                 else '-' + self.text
             return
-        if ch not in '0123456789.-':
+        if ch not in self.charset:
             return
         if ch == '-' and self.text:
             self.text = '-' + self.text[1:]
             return
-        if ch in '.-' and any(c in self.text for c in '.-'):
+        # В числовом поле точка и минус могут встречаться только раз;
+        # в текстовом (почта) это ломало бы адрес вида ivan@mail.ru
+        if self.charset == self.NUMERIC and ch in '.-' and \
+                any(c in self.text for c in '.-'):
             return
-        if len(self.text) >= 8:
+        if len(self.text) >= self.max_len:
             return
         self.text += ch
 
@@ -649,6 +693,147 @@ class Keypad(Widget):
         return True
 
 
+class TextKeypad(Widget):
+    """Экранная клавиатура для текста: буквы, @ и точка нужны для почты.
+
+    Три раскладки переключаются кнопкой `123 / abc / АБВ`; цифры,
+    символы `@` и `_` есть в нижней строке всегда, чтобы не искать их
+    в третьей раскладке.
+    """
+
+    LAYOUTS = {
+        'abc': ['abcdefghij', 'klmnopqrst', 'uvwxyz._-@'],
+        'ABC': ['ABCDEFGHIJ', 'KLMNOPQRS', 'TUVWXYZ._-@'],
+        '123': ['123456789', '0.,!?-/\\', ' '],
+    }
+    ORDER = ['abc', 'ABC', '123']
+
+    def __init__(self, rect, u=1.0):
+        self.rect = pygame.Rect(rect)
+        self.u = u
+        self.visible = False
+        self.field = None
+        self.mode = 'abc'
+        self.keys = []          # [(символ, rect)]
+        self.actions = []       # [(метка, rect)]
+        self.disp = pygame.Rect(0, 0, 0, 0)
+        self._build()
+
+    def _build(self):
+        u = self.u
+        gap = max(5, int(8 * u))
+        head = int(70 * u)
+        rows = self.LAYOUTS[self.mode]
+        kw = int((self.rect.width - 11 * gap) / 10)
+        kh = int((self.rect.height - head - 2 * gap) / 4.8)
+        kh = max(int(26 * u), kh)
+        gx = self.rect.x + gap
+        y0 = self.rect.y + head
+        self.keys = []
+        for r, row in enumerate(rows):
+            n = len(row)
+            for c, ch in enumerate(row):
+                self.keys.append((ch, pygame.Rect(gx + c * (kw + gap),
+                                                  y0 + r * (kh + gap),
+                                                  kw, kh)))
+        y = y0 + 3 * (kh + gap)
+        # нижний ряд: пробел, C, стирание, переключение раскладки, OK
+        wide = int(kw * 2.6)
+        x = self.rect.x + gap
+        bottom = []
+        bottom.append(('space', pygame.Rect(x, y, wide, kh)))
+        x += wide + gap
+        bottom.append(('C', pygame.Rect(x, y, kw, kh)))
+        x += kw + gap
+        bottom.append((BACKSPACE, pygame.Rect(x, y, kw, kh)))
+        x += kw + gap
+        bottom.append(('layout', pygame.Rect(x, y, int(kw * 2.2), kh)))
+        x += int(kw * 2.2) + gap
+        bottom.append(('OK', pygame.Rect(x, y, kw, kh)))
+        self.actions = bottom
+        self.disp = pygame.Rect(int(self.rect.centerx -
+                                    self.rect.width * 0.46),
+                                self.rect.y + int(26 * u),
+                                int(self.rect.width * 0.92),
+                                int(36 * u))
+
+    def open(self, field):
+        self.field = field
+        self.visible = True
+
+    def close(self):
+        self.field = None
+        self.visible = False
+
+    def _tap(self, pos):
+        for ch, r in self.keys:
+            if r.collidepoint(pos):
+                self.field.key(' ' if ch == ' ' else ch)
+                return
+        for ch, r in self.actions:
+            if r.collidepoint(pos):
+                if ch == 'C':
+                    self.field.text = ''
+                elif ch == BACKSPACE:
+                    self.field.key(BACKSPACE)
+                elif ch == 'space':
+                    self.field.key(' ')
+                elif ch == 'layout':
+                    i = self.ORDER.index(self.mode)
+                    self.mode = self.ORDER[(i + 1) % len(self.ORDER)]
+                    self._build()
+                else:
+                    self.field.submit()
+                    self.close()
+                return
+
+    def draw(self, surf):
+        if not self.visible:
+            return
+        u = self.u
+        shade = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 120))
+        surf.blit(shade, (0, 0))
+        rad = max(5, int(9 * u))
+        pygame.draw.rect(surf, SMOKE, self.rect, border_radius=rad)
+        pygame.draw.rect(surf, BORDER, self.rect, max(1, int(3 * u)),
+                         border_radius=rad)
+        blit_text(surf, 'Введите  ' + self.field.label,
+                  (self.rect.x + int(12 * u), self.rect.y + int(6 * u)),
+                  max(11, int(15 * u)), DKORANGE, 'lt', True)
+        shown = self.field.display_text() or '—'
+        pygame.draw.rect(surf, WHITE, self.disp)
+        pygame.draw.rect(surf, BORDER, self.disp, max(1, int(2 * u)))
+        blit_text(surf, shown[-40:], self.disp.center,
+                  max(14, int(24 * u)), BLACK, 'mm', True)
+        fs = max(11, int(21 * u))
+        for ch, r in self.keys:
+            pygame.draw.rect(surf, WHITE, r, border_radius=rad)
+            pygame.draw.rect(surf, BORDER, r, 1, border_radius=rad)
+            blit_text(surf, ch if ch != ' ' else 'пробел', r.center, fs,
+                      BLACK, 'mm', True)
+        for ch, r in self.actions:
+            col = LTGREEN if ch == 'OK' else (LTRED if ch == 'C' else
+                                              (LAVENDER if ch == 'layout'
+                                               else WHITE))
+            pygame.draw.rect(surf, col, r, border_radius=rad)
+            pygame.draw.rect(surf, BORDER, r, 1, border_radius=rad)
+            label = {'C': 'C', BACKSPACE: '<-', 'space': 'пробел',
+                     'layout': 'abc / АБВ / 123', 'OK': 'OK'}[ch]
+            blit_text(surf, label, r.center, max(10, int(16 * u)), BLACK,
+                      'mm', True)
+
+    def down(self, pos):
+        self._tap(pos)
+        return True
+
+    def drag(self, pos):
+        return True
+
+    def up(self, pos):
+        return True
+
+
 # ===================== ПРИЛОЖЕНИЕ =====================
 
 class TrigBattle:
@@ -666,10 +851,41 @@ class TrigBattle:
 
         self.settings = {'planes': True, 'music': False, 'hints': False,
                          'difficulty': 'Средний'}
-        # состояние пользователя (в этой версии авторизация не используется,
-        # в оригинале был неиспользуемый импорт auth_db)
+        # состояние пользователя (профиль; раньше авторизация не
+        # использовалась, в оригинале был неиспользуемый импорт auth_db)
         self.user_state = {'user_id': None, 'nickname': None,
                            'email': None, 'logged_in': False}
+
+        # ---------------- ПРОФИЛИ ----------------
+        # profiles.py кладёт базу в каталог `dtb` рядом с программой.
+        # Если модуля нет или база не открылась — игра работает, просто
+        # без профилей: профильная кнопка прячется.
+        self.profile_db = None
+        self.profile_error = ''
+        if profiles is not None:
+            try:
+                self.profile_db = profiles.Profiles()
+                saved = self.profile_db.restore_session()
+                if saved:
+                    self.set_user(saved)
+            except Exception as e:            # noqa: BLE001 - не мешаем игре
+                self.profile_db = None
+                self.profile_error = 'Профили недоступны: %s' % e
+        # содержимое полей форм (почта, пароль, ник, код, IP)
+        self.form = {'email': '', 'password': '', 'password2': '',
+                     'nick': '', 'code': '', 'ip': ''}
+        self.form_focus = None
+
+        # ---------------- ИГРА ПО СЕТИ ----------------
+        self.net = None                 # HostServer | Client | None
+        self.net_role = None            # 'host' | 'client'
+        self.net_code = ''
+        self.net_peer_nick = 'Соперник'
+        self.net_state = 'idle'         # idle|waiting|connected|battle|over
+        self.net_ready_sent = False
+        self.net_peer_ready = False
+        self.net_shots = 0
+        self.net_hits = 0
 
         self.FL = {'name': 'Игрок 1', 'units': [], 'misses': [], 'hints': set()}
         self.FR = {'name': 'Игрок 2', 'units': [], 'misses': [], 'hints': set()}
@@ -802,6 +1018,7 @@ class TrigBattle:
     def show_screen(self, name):
         self.screen_name = name
         self.keypad.close()
+        self.textpad.close()
         self.pressed_btn = None
         self.pressed_slider = None
 
@@ -813,10 +1030,16 @@ class TrigBattle:
         while self.running:
             for ev in pygame.event.get():
                 self.handle_event(ev)
+            if self.net is not None:
+                self._net_poll()
             self.pump_timers()
             self.draw()
             self.present()
             self.clock.tick(60)
+        if self.net is not None:
+            self.net.send({'t': 'bye'})
+            self.net.close()
+            self.net = None
         pygame.quit()
 
     def present(self):
@@ -854,6 +1077,9 @@ class TrigBattle:
         return self.screens.get(self.screen_name, [])
 
     def on_down(self, pos, btn=1):
+        if self.textpad.visible:
+            self.textpad.down(pos)
+            return
         if self.keypad.visible:
             self.keypad.down(pos)
             return
@@ -873,8 +1099,13 @@ class TrigBattle:
                 wdg.press(pos)
                 return
             if isinstance(wdg, Field):
+                # текстовые поля (почта/пароль/код) открывают клавиатуру
+                # с буквами, числовые — цифровую
                 wdg.press()
-                self.keypad.open(wdg)
+                if wdg.text_keypad:
+                    self.textpad.open(wdg)
+                else:
+                    self.keypad.open(wdg)
                 return
         if self.screen_name == 'game':
             for side in ('L', 'R'):
@@ -883,6 +1114,9 @@ class TrigBattle:
                     return
 
     def on_move(self, pos, btn=1):
+        if self.textpad.visible:
+            self.textpad.drag(pos)
+            return
         if self.keypad.visible:
             self.keypad.drag(pos)
             return
@@ -893,6 +1127,9 @@ class TrigBattle:
             self.board_touch(self.drag_side, pos, 'move', btn)
 
     def on_up(self, pos, btn=1):
+        if self.textpad.visible:
+            self.textpad.up(pos)
+            return
         if self.keypad.visible:
             self.keypad.up(pos)
             return
@@ -914,6 +1151,9 @@ class TrigBattle:
             self.toggle_fullscreen()
             return
         if k == pygame.K_ESCAPE:
+            if self.textpad.visible:
+                self.textpad.close()
+                return
             if self.keypad.visible:
                 self.keypad.close()
                 return
@@ -924,20 +1164,31 @@ class TrigBattle:
                 self.deselect()
             return
         # ввод в сфокусированное поле (на ПК — физическая клавиатура)
-        for wdg in self.game_widgets:
-            if isinstance(wdg, Field) and wdg.focused:
-                if k == pygame.K_BACKSPACE:
-                    wdg.key(BACKSPACE)
-                elif k in (pygame.K_PERIOD, pygame.K_COMMA):
-                    wdg.key('.')
-                elif k in (pygame.K_MINUS, pygame.K_PLUS, pygame.K_EQUALS):
-                    wdg.key('±')
-                elif pygame.K_0 <= k <= pygame.K_9:
-                    wdg.key(chr(k))
-                elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                    wdg.submit()
-                    self.keypad.close()
-                return
+        # поля ищем на текущем экране: игровые числа и текстовые поля
+        # входа/сети живут в разных списках виджетов
+        focused = [w for w in (self.game_widgets if self.screen_name == 'game'
+                               else self.widgets())
+                   if isinstance(w, Field) and w.focused]
+        if not focused and self.textpad.visible:
+            focused = [self.textpad.field]
+        for wdg in focused:
+            if k == pygame.K_BACKSPACE:
+                wdg.key(BACKSPACE)
+            elif k in (pygame.K_PERIOD, pygame.K_COMMA):
+                wdg.key('.')
+            elif k in (pygame.K_MINUS, pygame.K_PLUS, pygame.K_EQUALS):
+                wdg.key('±')
+            elif k == pygame.K_at:
+                wdg.key('@')
+            elif pygame.K_0 <= k <= pygame.K_9:
+                wdg.key(chr(k))
+            elif 32 <= k <= 126:
+                wdg.key(chr(k))          # латиница, '@', '.', '_', '-'
+            elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                wdg.submit()
+                self.keypad.close()
+                self.textpad.close()
+            return
         if self.screen_name != 'game':
             return
         # горячие клавиши стройки
@@ -1101,6 +1352,12 @@ class TrigBattle:
         else:
             self.s2 = self.sliders[1].value
         self.update_angles()
+        if self.game['mode'] == 'net' and self.net is not None:
+            # формулы P1 и P2 считаются от обоих углов, значит соперник
+            # должен знать оба — иначе точки выстрела разойдутся
+            self.net.send({'t': 'angles',
+                           'a1': round(self.s1, 4),
+                           'a2': round(self.s2, 4)})
 
     def update_angles(self):
         a1, a2 = math.radians(self.s1), math.radians(self.s2)
@@ -1202,6 +1459,9 @@ class TrigBattle:
 
     def target_fld(self):
         """Поле, по которому стреляет текущий игрок."""
+        if self.game['mode'] == 'net':
+            # по сети всегда стреляем в флот соперника (FR)
+            return self.FR
         if self.game['mode'] == 'ai' or self.game['turn'] == 'player1':
             return self.FR
         return self.FL
@@ -1212,6 +1472,10 @@ class TrigBattle:
             return None
         if self.game['mode'] == 'ai':
             return 'R'
+        if self.game['mode'] == 'net':
+            # прицел живой только в свой ход и всегда на сопернике
+            mine = self._net_my_turn()
+            return 'R' if self.game['turn'] == mine else None
         return 'R' if self.game['turn'] == 'player1' else 'L'
 
     def cur_type(self):
@@ -1374,6 +1638,9 @@ class TrigBattle:
             if self.game['phase'] == 'battle':
                 self.tutorial_fire()
             return
+        if self.game['mode'] == 'net':
+            self._net_fire()
+            return
         if self.game['phase'] != 'battle':
             self.set_msg('Сначала завершите расстановку юнитов!')
             return
@@ -1482,6 +1749,9 @@ class TrigBattle:
             if self.tutorial['waiting'] == 'start':
                 self.tut_next()
             return
+        if self.game['mode'] == 'net' and self.game['phase'] == 'place1':
+            self.net_send_ready()
+            return
         if self.game['phase'] == 'place1':
             if not self.FL['units']:
                 self.set_msg('Игрок 1: постройте хотя бы один юнит!', DKRED)
@@ -1524,8 +1794,12 @@ class TrigBattle:
                          enemy_moves=0, last='—', awaiting_tap=False,
                          streak={'player1': 0, 'player2': 0})
         self.unit_state.update(selected=None, last=None)
-        self.btn_start.label = 'Начать бой' if self.game['mode'] == 'ai' \
-            else 'Готово (Игрок 1)'
+        if self.game['mode'] == 'ai':
+            self.btn_start.label = 'Начать бой'
+        elif self.game['mode'] == 'net':
+            self.btn_start.label = 'Готово'
+        else:
+            self.btn_start.label = 'Готово (Игрок 1)'
         self.timers.clear()
         self.sliders[0].set(ANGLE1_0)
         self.sliders[1].set(ANGLE2_0)
@@ -1835,6 +2109,7 @@ class TrigBattle:
             self.keypad.draw(s)
         else:
             self.draw_menu_screen(s)
+            self.textpad.draw(s)
 
     def draw_game(self, s):
         u = self.u
@@ -2362,8 +2637,464 @@ class TrigBattle:
         elif name == 'victory':
             blit_text(s, getattr(self, 'victory_title', ''), (cx, int(0.28 * H)),
                       int(clamp(0.04 * H, 20, 38)), DGREEN, 'mm', True)
+        elif name in ('login', 'register'):
+            t = int(clamp(0.034 * H, 18, 32))
+            blit_text(s, 'Вход' if name == 'login' else 'Регистрация',
+                      (cx, int(0.13 * H)), t, NAVY, 'mm', True)
+            hint = ('Один адрес почты — один аккаунт.'
+                    if name == 'register'
+                    else 'Введите почту и пароль, созданные при регистрации.')
+            size, lines = self.fit_lines(hint, W - 2 * self.M,
+                                         int(clamp(0.022 * H, 11, 19)),
+                                         int(0.24 * H))
+            blit_text(s, lines[0] if lines else '', (cx, int(0.205 * H)),
+                      size, DGRAY, 'mm')
+        elif name == 'profile':
+            t = int(clamp(0.034 * H, 18, 32))
+            blit_text(s, 'Профиль', (cx, int(0.13 * H)), t, NAVY, 'mm', True)
+            st = self.profile_stats()
+            if st is not None:
+                acc = 100.0 * st['hits'] / st['shots'] if st['shots'] else 0.0
+                size, lines = self.fit_lines(
+                    '%s\nИгр: %d   Побед: %d   Поражений: %d\n'
+                    'Выстрелов: %d   Попаданий: %d   Точность: %.0f%%'
+                    % (self.user_state['email'], st['games'], st['wins'],
+                       st['losses'], st['shots'], st['hits'], acc),
+                    W - 2 * self.M, int(clamp(0.024 * H, 12, 21)),
+                    int(0.22 * H))
+                for i, ln in enumerate(lines):
+                    blit_text(s, ln, (cx, int(0.20 * H) + i *
+                                      int(clamp(0.030 * H, 15, 26))),
+                              size, BLACK, 'mm', i == 0)
+        elif name == 'net':
+            blit_text(s, 'Игра по сети', (cx, int(0.13 * H)),
+                      int(clamp(0.034 * H, 18, 32)), NAVY, 'mm', True)
+            size, lines = self.fit_lines(
+                'Оба устройства должны быть в одной Wi-Fi или проводной сети.',
+                W - 2 * self.M, int(clamp(0.024 * H, 12, 21)),
+                int(0.24 * H))
+            blit_text(s, lines[0] if lines else '', (cx, int(0.21 * H)),
+                      size, DGRAY, 'mm')
+        elif name == 'net_host':
+            blit_text(s, 'Ваш код игры', (cx, int(0.16 * H)),
+                      int(clamp(0.028 * H, 15, 26)), NAVY, 'mm', True)
+            code = self.net_code or '—'
+            big = int(clamp(0.11 * H, 40, 104))
+            box = pygame.Rect(0, 0, int(0.62 * W), int(big * 1.9))
+            box.center = (cx, self._net_code_y + int(big))
+            pygame.draw.rect(s, WHITE, box, border_radius=10)
+            pygame.draw.rect(s, BORDER, box, 2, border_radius=10)
+            blit_text(s, code, box.center, big, BLACK, 'mm', True)
+            size, lines = self.fit_lines(
+                'Пока соперник не подключился. Передайте ему этот код — '
+                'он введёт его в пункте «Подключиться по коду».',
+                W - 2 * self.M, int(clamp(0.022 * H, 11, 19)),
+                int(0.62 * H) - int(0.02 * H))
+            for i, ln in enumerate(lines):
+                blit_text(s, ln, (cx, int(0.66 * H) + i * int(size * 1.4)),
+                          size, DGRAY, 'mm')
+            size, lines = self.fit_lines(
+                'Ваш IP в этой сети: %s' % (
+                    netgame.local_ip() if netgame else '—'),
+                W - 2 * self.M, int(clamp(0.022 * H, 11, 19)),
+                int(0.86 * H))
+            for i, ln in enumerate(lines):
+                blit_text(s, ln, (cx, int(0.86 * H) + i * int(size * 1.4)),
+                          size, DGRAY, 'mm')
+        elif name in ('net_join', 'net_ip'):
+            blit_text(s, 'Подключение' if name == 'net_join'
+                      else 'Подключение по IP', (cx, int(0.13 * H)),
+                      int(clamp(0.034 * H, 18, 32)), NAVY, 'mm', True)
+            if self.net is not None and \
+                    getattr(self.net, 'status_text', ''):
+                size, lines = self.fit_lines(self.net.status_text,
+                                             W - 2 * self.M,
+                                             int(clamp(0.024 * H, 12, 21)),
+                                             int(0.24 * H))
+                blit_text(s, lines[0] if lines else '', (cx, int(0.21 * H)),
+                          size, NAVY, 'mm')
         for wdg in self.widgets():
             wdg.draw(s)
+
+    # =========================================================
+    #  ПРОФИЛИ: регистрация по почте, вход, ник, статистика
+    # =========================================================
+    def set_user(self, data):
+        """Запомнить вошедшего пользователя."""
+        self.user_state.update(user_id=data['id'], nickname=data['nickname'],
+                               email=data['email'], logged_in=True)
+        return self.user_state
+
+    def profile_label(self):
+        if self.user_state['logged_in']:
+            nick = self.user_state['nickname']
+            return nick if len(nick) <= 14 else nick[:13] + '…'
+        return 'Профиль'
+
+    def open_profile(self):
+        """Кнопка в левом верхнем углу: вход, если гость."""
+        if self.profile_db is None:
+            self.set_msg('Профили недоступны: %s' % self.profile_error, DKRED)
+            return
+        self.form['password'] = ''
+        self.form['password2'] = ''
+        if self.user_state['logged_in']:
+            self.form['nick'] = self.user_state['nickname']
+            self.show_screen('profile')
+        else:
+            self.show_screen('login')
+
+    def do_login(self):
+        try:
+            data = self.profile_db.login(self.form['email'],
+                                         self.form['password'])
+        except Exception as e:                # noqa: BLE001
+            self.set_msg(str(e), DKRED)
+            return
+        self.set_user(data)
+        self.form['password'] = ''
+        self.set_msg('Здравствуйте, %s!' % data['nickname'], DGREEN)
+        self.show_screen('menu')
+
+    def do_register(self):
+        if self.form['password'] != self.form['password2']:
+            self.set_msg('Пароли не совпадают', DKRED)
+            return
+        try:
+            data = self.profile_db.register(self.form['email'],
+                                            self.form['password'],
+                                            self.form['nick'])
+        except Exception as e:                # noqa: BLE001
+            self.set_msg(str(e), DKRED)
+            return
+        self.set_user(data)
+        self.form['password'] = self.form['password2'] = ''
+        self.set_msg('Профиль создан. Приятной игры, %s!'
+                     % data['nickname'], DGREEN)
+        self.show_screen('menu')
+
+    def do_rename(self):
+        try:
+            nick = self.profile_db.change_nickname(
+                self.user_state['user_id'], self.form['nick'])
+        except Exception as e:                # noqa: BLE001
+            self.set_msg(str(e), DKRED)
+            return
+        self.user_state['nickname'] = nick
+        self.set_msg('Никнейм изменён: %s' % nick, DGREEN)
+        self.show_screen('profile')
+
+    def do_logout(self):
+        try:
+            self.profile_db.logout()
+        except Exception:                     # noqa: BLE001
+            pass
+        self.user_state.update(user_id=None, nickname=None, email=None,
+                               logged_in=False)
+        self.form['password'] = self.form['password2'] = ''
+        self.set_msg('Вы вышли из профиля', NAVY)
+        self.show_screen('menu')
+
+    def profile_stats(self):
+        if self.profile_db is None or not self.user_state['logged_in']:
+            return None
+        try:
+            return self.profile_db.get_stats(self.user_state['user_id'])
+        except Exception:                     # noqa: BLE001
+            return None
+
+    def _form_submit(self, key, text):
+        """Подтверждение поля формы: чистим пробелы, но пароль не трогаем."""
+        if key in ('password', 'password2'):
+            self.form[key] = text
+        else:
+            self.form[key] = text.strip()
+        if key == 'code' and netgame is not None:
+            self.form['code'] = netgame.normalize_code(self.form['code'])
+        return self.form[key]
+
+    # =========================================================
+    #  ИГРА ПО ЛОКАЛЬНОЙ СЕТИ
+    # =========================================================
+    def my_nick(self):
+        return (self.user_state['nickname']
+                or (self.profile_label() if self.user_state['logged_in']
+                    else 'Игрок'))
+
+    def net_close(self):
+        if self.net is not None:
+            self.net.close()
+        self.net = None
+        self.net_role = None
+        self.net_state = 'idle'
+        self.net_ready_sent = False
+        self.net_peer_ready = False
+        self.net_code = ''
+
+    def net_start_host(self):
+        """Создать игру: получаем код, ждём соперника."""
+        if netgame is None:
+            self.set_msg('Сеть недоступна в этой сборке', DKRED)
+            return
+        self.net_close()
+        try:
+            host = netgame.HostServer(self.my_nick())
+            host.start_beacon()
+        except Exception as e:                # noqa: BLE001
+            self.set_msg(str(e), DKRED)
+            return
+        self.net = host
+        self.net_role = 'host'
+        self.net_code = host.code
+        self.net_state = 'waiting'
+        self.show_screen('net_host')
+        self.set_msg('Код игры: %s. Передайте его сопернику.' % host.code,
+                     NAVY)
+
+    def net_start_client_code(self):
+        code = netgame.normalize_code(self.form['code'])
+        if len(code) != netgame.CODE_LENGTH:
+            self.set_msg('Код состоит из %d символов'
+                         % netgame.CODE_LENGTH, DKRED)
+            return
+        self.net_close()
+        try:
+            cli = netgame.Client(self.my_nick())
+            cli.search_code(code)
+        except Exception as e:                # noqa: BLE001
+            self.set_msg(str(e), DKRED)
+            return
+        self.net = cli
+        self.net_role = 'client'
+        self.net_code = code
+        self.net_state = 'waiting'
+        self.show_screen('net_join')
+        self.set_msg('Ищу соперника с кодом %s...' % code, NAVY)
+
+    def net_start_client_ip(self):
+        ip = (self.form['ip'] or '').strip()
+        if not ip:
+            self.set_msg('Введите IP-адрес соперника', DKRED)
+            return
+        self.net_close()
+        try:
+            cli = netgame.Client(self.my_nick())
+            cli.connect_ip(ip)
+        except Exception as e:                # noqa: BLE001
+            self.set_msg(str(e), DKRED)
+            return
+        self.net = cli
+        self.net_role = 'client'
+        self.net_state = 'connected'
+        self.show_screen('net_join')
+        self.set_msg('Подключение к %s установлено' % ip, DGREEN)
+
+    def net_begin_placement(self):
+        """Соединение есть: начинаем расставлять свой флот.
+
+        По сети у каждого игрока ровно одно поле — своё. Левое помечено
+        «Вы», правое — ник соперника; флот соперника придёт сразу после
+        его подтверждения о готовности.
+        """
+        self.game['mode'] = 'net'
+        self.FL['name'] = 'Вы (%s)' % self.my_nick()
+        self.FR['name'] = self.net_peer_nick
+        self.set_aim_sel(1 if self._net_my_turn() == 'player1' else 2)
+        self.set_shot(self._net_my_turn())
+        self.reset_game()
+        self.show_screen('game')
+        self.set_msg('Расставьте флот на ЛЕВОМ поле и нажмите «Готово». '
+                     'Соперник делает то же самое.', NAVY)
+
+    def net_cancel(self):
+        self.net_close()
+        self.set_msg('Соединение закрыто', NAVY)
+        self.show_screen('net')
+
+    def _net_poll(self):
+        """Разбор входящих сообщений. Вызывается каждый кадр."""
+        if self.net is None:
+            return
+        # хост в ожидании: проверяем, не подключился ли соперник
+        if self.net_role == 'host' and self.net_state == 'waiting':
+            try:
+                if self.net.try_accept():
+                    self.net_state = 'connected'
+                    self.set_msg('Соперник подключился!', DGREEN)
+                    self.net_begin_placement()
+            except Exception as e:            # noqa: BLE001
+                self.set_msg(str(e), DKRED)
+                self.net_close()
+                return
+        # клиент ищет хост по коду: следим за состоянием поиска
+        if self.net_role == 'client' and \
+                getattr(self.net, 'status', '') == 'searching' and \
+                self.screen_name == 'net_join':
+            self.set_msg(self.net.status_text or 'Ищу соперника...', NAVY)
+        if getattr(self.net, 'status', '') == 'ready' and \
+                self.net_state == 'waiting':
+            self.net_state = 'connected'
+            self.set_msg('Соперник найден!', DGREEN)
+            self.net_begin_placement()
+
+        for msg in self.net.poll():
+            self._net_handle(msg)
+
+    def _net_handle(self, msg):
+        kind = msg.get('t')
+        if kind == 'hello':
+            nick = str(msg.get('nick') or 'Соперник')[:16]
+            self.net_peer_nick = nick
+            self.FR['name'] = nick
+            self.set_msg('Соперник: %s' % nick, DGREEN)
+        elif kind == 'angles':
+            # углы общие: отсюда обе формулы выстрела считаются одинаково
+            self.sliders[0].set(msg.get('a1', self.s1), exact=True)
+            self.sliders[1].set(msg.get('a2', self.s2), exact=True)
+            self.s1, self.s2 = self.sliders[0].value, self.sliders[1].value
+            self.update_angles()
+        elif kind == 'ready':
+            self.net_peer_ready = True
+            self.FR['units'] = netgame.decode_fleet(msg.get('units'))
+            self.FR['misses'].clear()
+            self.FR['hints'].clear()
+            self._net_maybe_start()
+        elif kind == 'shot':
+            self._net_incoming(msg)
+        elif kind == 'disconnect':
+            self.set_msg('Соперник отключился', DKRED)
+            self.net_state = 'idle'
+            if self.game['phase'] != 'over':
+                self.show_screen('net')
+        elif kind == 'bye':
+            self.net_close()
+            self.show_screen('net')
+
+    def net_send_ready(self):
+        """Отправляем свой флот и ждём флот соперника."""
+        if self.net is None or self.net_ready_sent:
+            return
+        if not self.FL['units']:
+            self.set_msg('Сначала расставьте флот!', DKRED)
+            return
+        self.net.send({'t': 'ready',
+                       'units': netgame.encode_fleet(self.FL['units'])})
+        self.net_ready_sent = True
+        self.set_msg('Флот отправлен. Ждём флот соперника...', NAVY)
+        self._net_maybe_start()
+
+    def _net_maybe_start(self):
+        """Оба флота получены — начинаем бой. Ход первого — у хоста."""
+        if not (self.net_ready_sent and self.net_peer_ready):
+            return
+        if self.game['phase'] == 'battle':
+            return
+        self.net_state = 'battle'
+        self.game['phase'] = 'battle'
+        # ходит тот, кто играет за Игрока 1: хост — за первого,
+        # клиент — за второго
+        first = 'player1' if self.net_role == 'host' else 'player2'
+        self.game['turn'] = first
+        self.btn_start.label = 'Бой идёт'
+        self.game['my_moves'] = 0
+        self.game['enemy_moves'] = 0
+        self.set_msg('Оба флота на месте. %s'
+                     % ('ВАШ ХОД: наведите прицел и «Совершить ход».'
+                        if first == 'player1'
+                        else 'Ход соперника. Ждём...'), DGREEN)
+        self.show_screen('game')
+        self.update_angles()
+
+    def _net_fire(self):
+        """Выстрел по сети: считаем точку, шлём её, применяем у себя."""
+        if self.game['phase'] != 'battle':
+            self.set_msg('Сначала расставьте флот и нажмите «Готово»')
+            return
+        if self.game['turn'] != self._net_my_turn():
+            self.set_msg('Сейчас ход соперника', NAVY)
+            return
+        who = self._net_my_turn()
+        P = self.state['P1'] if who == 'player1' else self.state['P2']
+        if P is None:
+            self.set_msg('Угол не определён (проверьте tg/ctg)', DKRED)
+            return
+        target = self.FR              # стреляем по флоту соперника
+        px, py = P
+        self.net_shots += 1
+        if abs(px) > 1 or abs(py) > 1:
+            result = 'miss'
+            target['misses'].append((round(px, 3), round(py, 3)))
+        else:
+            result = self.fire_at(target, px, py)
+            if result in ('hit', 'sunk'):
+                self.net_hits += 1
+        res_txt = {'hit': 'ПОПАДАНИЕ!', 'sunk': 'ПОТОПЛЕН!',
+                   'miss': 'МИМО'}[result]
+        self.game['last'] = res_txt
+        self.net.send({'t': 'shot', 'x': px, 'y': py})
+        if self.all_sunk(target['units']):
+            self._net_win()
+            return
+        if result in ('hit', 'sunk'):
+            self.set_msg('%s Соперник пропускает ход — ходите снова!'
+                         % res_txt, DGREEN)
+        else:
+            self.game['turn'] = 'player2' if who == 'player1' else 'player1'
+            self.set_msg('МИМО. Ход соперника...', NAVY)
+        self.update_angles()
+
+    def _net_my_turn(self):
+        """За какого игрока играем: хост — за первого, клиент — за второго."""
+        return 'player1' if self.net_role == 'host' else 'player2'
+
+    def _net_incoming(self, msg):
+        """Выстрел соперника по нашему флоту."""
+        if self.game['phase'] != 'battle':
+            return
+        px, py = msg.get('x', 0.0), msg.get('y', 0.0)
+        result = 'miss'
+        if abs(px) <= 1 and abs(py) <= 1:
+            result = self.fire_at(self.FL, px, py)
+        res_txt = {'hit': 'ПОПАДАНИЕ!', 'sunk': 'ПОТОПЛЕН!',
+                   'miss': 'МИМО'}[result]
+        if self.all_sunk(self.FL['units']):
+            self._net_lose()
+            return
+        if result == 'miss':
+            # промах — ход переходит к нам
+            self.game['turn'] = self._net_my_turn()
+            self.set_msg('МИМО. %s' % ('ВАШ ХОД.' if self.game['turn'] ==
+                                        self._net_my_turn()
+                                        else 'Ход соперника...'), NAVY)
+        else:
+            self.game['turn'] = 'player2' if self._net_my_turn() == \
+                'player1' else 'player1'
+            self.set_msg('%s Ваш корабль поражён!' % res_txt, DKRED)
+
+    def _net_win(self):
+        self.game['phase'] = 'over'
+        self.net_state = 'over'
+        won = True
+        self.set_msg('ПОБЕДА! Флот соперника уничтожен.', DGREEN)
+        self.show_victory('Победил %s!' % self.my_nick())
+        self._net_save_stats(won)
+
+    def _net_lose(self):
+        self.game['phase'] = 'over'
+        self.net_state = 'over'
+        won = False
+        self.set_msg('Ваш флот уничтожен.', DKRED)
+        self.show_victory('Победил %s!' % self.net_peer_nick)
+        self._net_save_stats(won)
+
+    def _net_save_stats(self, won):
+        if self.profile_db is None or not self.user_state['logged_in']:
+            return
+        try:
+            self.profile_db.record_game(self.user_state['user_id'], won,
+                                        self.net_shots, self.net_hits)
+        except Exception:                     # noqa: BLE001
+            pass
 
     # =========================================================
     #  ПОСТРОЕНИЕ ИНТЕРФЕЙСА (адаптивное)
@@ -2386,6 +3117,32 @@ class TrigBattle:
                               label, cb, color, int(size * u), bold))
             return lst[-1]
 
+        # Кнопка профиля живёт в левом верхнем углу КАЖДОГО экрана меню:
+        # по ней вход/регистрация, ник и статистика.
+        def add_profile(lst):
+            if self.profile_db is None:
+                return
+            pw = int(clamp(0.20 * W, 120, 260))
+            ph = int(clamp(0.072 * H, 34, 68))
+            logged = self.user_state['logged_in']
+            lst.insert(0, Button(pygame.Rect(self.M // 2, int(0.035 * H),
+                                             pw, ph),
+                                 self.profile_label(),
+                                 self.open_profile,
+                                 LTGREEN if logged else LTSKY,
+                                 max(12, int(17 * u)), True))
+
+        def form_field(lst, key, label, x, y, w, h, masked=False,
+                       max_len=40):
+            fld = Field(pygame.Rect(x, y, w, h), label,
+                        lambda: self.form[key],
+                        lambda t: self._form_submit(key, t),
+                        size=max(12, int(19 * u)),
+                        charset=Field.TEXT, max_len=max_len,
+                        text_keypad=True, masked=masked)
+            lst.append(fld)
+            return fld
+
         back = lambda lst: btn(lst, cx - bw / 2, back_y, bw, bh, 'Назад',
                                lambda: self.show_screen('menu'),
                                (210, 210, 210), 20)
@@ -2404,6 +3161,7 @@ class TrigBattle:
             btn(menu, cx - bw / 2, y, bw, bh, label, cb, col)
             y += bh + int(0.014 * H)
         self.screens['menu'] = menu
+        add_profile(menu)
 
         # --- выбор режима ---
         diff = []
@@ -2422,14 +3180,20 @@ class TrigBattle:
         btn(diff, W * 0.73 - bw2 / 2, int(0.22 * H) + int(bh * 1.7) +
             int(0.018 * H), bw2, int(bh * 1.4), 'Туториал',
             self.start_tutorial, LTSKY, 24)
+        btn(diff, W * 0.73 - bw2 / 2, int(0.22 * H) + int(bh * 1.7) +
+            int(bh * 1.4) + 2 * int(0.018 * H), bw2, int(bh * 1.4),
+            'Игра по сети', lambda: self.show_screen('net'), LTGREEN, 24)
         back(diff)
         self.screens['difficulty'] = diff
+        add_profile(diff)
 
         # --- правила / обратная связь ---
         self.screens['rules'] = []
         back(self.screens['rules'])
         self.screens['feedback'] = []
         back(self.screens['feedback'])
+        add_profile(self.screens['rules'])
+        add_profile(self.screens['feedback'])
 
         # --- настройки ---
         ch = int(clamp(0.06 * H, 30, 46))
@@ -2455,6 +3219,7 @@ class TrigBattle:
         ]
         back(sett)
         self.screens['settings'] = sett
+        add_profile(sett)
 
         # --- победа ---
         vic = []
@@ -2464,6 +3229,116 @@ class TrigBattle:
         btn(vic, cx - bw / 2, y + bh + int(0.02 * H), bw, bh, 'В меню',
             lambda: self.show_screen('menu'), (210, 210, 210), 22)
         self.screens['victory'] = vic
+        add_profile(vic)
+
+        self.build_profile_ui(btn, add_profile, form_field, back, cx, bw, bh)
+
+    # ---------------- ЭКРАНЫ ПРОФИЛЕЙ И СЕТИ ----------------
+    def build_profile_ui(self, btn, add_profile, form_field, back, cx, bw, bh):
+        u, W, H = self.u, self.W, self.H
+        fw = int(clamp(0.46 * W, 260, 620))       # ширина полей формы
+        fh = int(clamp(0.072 * H, 34, 66))
+        fx = (W - fw) // 2
+        gap = int(0.018 * H)
+        y = int(0.29 * H)
+
+        # --- вход ---
+        lg = []
+        form_field(lg, 'email', 'почта', fx, y, fw, fh, max_len=120)
+        y2 = y + fh + gap
+        form_field(lg, 'password', 'пароль', fx, y2, fw, fh, masked=True,
+                   max_len=64)
+        y3 = y2 + fh + gap
+        btn(lg, fx, y3, fw // 2 - gap // 2, fh, 'Войти', self.do_login,
+            LTGREEN, 20)
+        btn(lg, fx + fw // 2 + gap // 2, y3, fw // 2 - gap // 2, fh,
+            'Регистрация', lambda: self.show_screen('register'), LTSKY, 20)
+        back(lg)
+        self.screens['login'] = lg
+        add_profile(lg)
+
+        # --- регистрация ---
+        rg = []
+        form_field(rg, 'email', 'почта', fx, y, fw, fh, max_len=120)
+        y2 = y + fh + gap
+        form_field(rg, 'password', 'пароль', fx, y2, fw, fh, masked=True,
+                   max_len=64)
+        y3 = y2 + fh + gap
+        form_field(rg, 'password2', 'пароль ещё раз', fx, y3, fw, fh,
+                   masked=True, max_len=64)
+        y4 = y3 + fh + gap
+        form_field(rg, 'nick', 'никнейм', fx, y4, fw, fh, max_len=16)
+        y5 = y4 + fh + gap
+        btn(rg, fx, y5, fw, fh, 'Создать профиль', self.do_register,
+            LTBLUE, 20)
+        y6 = y5 + fh + gap
+        btn(rg, fx, y6, fw, fh, 'Я уже зарегистрирован',
+            lambda: self.show_screen('login'), (215, 215, 215), 17)
+        back(rg)
+        self.screens['register'] = rg
+        add_profile(rg)
+
+        # --- профиль (вошедший) ---
+        pf = []
+        y7 = int(0.34 * H)
+        form_field(pf, 'nick', 'никнейм', fx, y7, fw, fh, max_len=16)
+        y8 = y7 + fh + gap
+        btn(pf, fx, y8, fw, fh, 'Сохранить никнейм', self.do_rename,
+            LTBLUE, 20)
+        y9 = y8 + fh + gap
+        btn(pf, fx, y9, fw, fh, 'Выйти из профиля', self.do_logout,
+            LTRED, 20)
+        back(pf)
+        self.screens['profile'] = pf
+        add_profile(pf)
+
+        # --- сеть: что делать ---
+        nt = []
+        yn = int(0.28 * H)
+        btn(nt, fx, yn, fw, bh, 'Создать игру (получить код)',
+            self.net_start_host, LTGREEN, 20)
+        yn += bh + gap
+        btn(nt, fx, yn, fw, bh, 'Подключиться по коду',
+            lambda: self.show_screen('net_join'), LTSKY, 20)
+        yn += bh + gap
+        btn(nt, fx, yn, fw, bh, 'Подключиться по IP',
+            lambda: self.show_screen('net_ip'), LAVENDER, 20)
+        back(nt)
+        self.screens['net'] = nt
+        add_profile(nt)
+
+        # --- хост: показ кода ---
+        nh = []
+        self._net_code_y = int(0.30 * H)
+        btn(nh, fx, int(0.62 * H), fw, bh, 'Отмена', self.net_cancel,
+            LTRED, 20)
+        self.screens['net_host'] = nh
+        add_profile(nh)
+
+        # --- клиент: ввод кода ---
+        nj = []
+        form_field(nj, 'code', 'код (5 символов)', fx, y, fw, fh,
+                   max_len=5)
+        yj = y + fh + gap
+        btn(nj, fx, yj, fw, bh, 'Искать соперника',
+            self.net_start_client_code, LTGREEN, 20)
+        yj += bh + gap
+        btn(nj, fx, yj, fw, bh, 'Отмена', self.net_cancel, LTRED, 20)
+        back(nj)
+        self.screens['net_join'] = nj
+        add_profile(nj)
+
+        # --- клиент: ввод IP ---
+        ni = []
+        form_field(ni, 'ip', 'IP соперника', fx, y, fw, fh, max_len=45)
+        yi = y + fh + gap
+        btn(ni, fx, yi, fw, bh, 'Подключиться', self.net_start_client_ip,
+            LTGREEN, 20)
+        yi += bh + gap
+        btn(ni, fx, yi, fw, bh, 'Отмена', self.net_cancel, LTRED, 20)
+        back(ni)
+        self.screens['net_ip'] = ni
+        add_profile(ni)
 
     def make_buttons(self, y, h, specs, x0, gap, limit):
         """Кнопки в ряд с авто-шириной по тексту; optional-кнопки отбрасываются,
@@ -2544,6 +3419,7 @@ class TrigBattle:
         self.f_ctg = Field(pygame.Rect(M + 3 * block + lab_w, fy, box_w, fh),
                            'ctg2', self.ctg_txt, self.submit_ctg, f17)
         self.keypad = Keypad(self.KP, u)
+        self.textpad = TextKeypad(self.KP, u)
         self.hint2_x = M + 4 * block + gap
         self.row_angles += [self.f_sin, self.f_cos, self.f_tg, self.f_ctg]
 

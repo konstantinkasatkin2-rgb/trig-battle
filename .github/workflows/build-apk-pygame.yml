@@ -113,7 +113,13 @@ jobs:
       - name: Sanity check (игра импортируется)
         run: |
           python -m pip install --upgrade pygame
-          cd ready_apk && python -c "import main; print('entry point ok')"
+          # игра, профили и сеть лежат в корне репозитория, точка входа
+          # main.py — в ready_apk; рецепт собирает их вместе
+          cd ready_apk && python -c "
+          import sys; sys.path.insert(0, '..')
+          import main, trig_battle_pygame, profiles, netgame
+          print('все модули на месте:', main.__name__, trig_battle_pygame.__name__, profiles.__name__, netgame.__name__)
+          "
 
       # Рецепт trigbattle_src — единственное, что кладёт код игры в APK.
       # Проверяем его за секунду ДО девятиминутной сборки, чтобы не ждать
@@ -127,6 +133,15 @@ jobs:
       - name: "Sanity check (рецепт pygame, simd_blitters в surface)"
         working-directory: ready_apk
         run: python tools/test_pygame_recipe.py
+
+      # Игра по сети целиком проверяется на ПК: два игрока в одном
+      # процессе, реальные сокеты. Секунды вместо девяти минут сборки,
+      # а ловит ровно те ошибки, которые на телефоне ищутся вручную.
+      - name: "Sanity check (игра по сети, два игрока)"
+        working-directory: ready_apk
+        run: |
+          python -m pip install --upgrade pygame
+          python tools/test_netgame.py
 
       - name: Build APK
         working-directory: ready_apk
