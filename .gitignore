@@ -19,3 +19,6 @@ db_key.key
 
 # кэш компилятора в CI
 .ccache/
+
+# промежуточные файлы сборки .exe (PyInstaller)
+build_exe/

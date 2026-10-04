@@ -63,6 +63,10 @@ import os
 import random
 import sys
 
+# pygame не должен печатать приветствие поверх игры; переменная
+# читается при первом импорте pygame, поэтому ставим её до него
+os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
+
 import pygame
 
 # Профили и сетевая игра — отдельные модули, чтобы их можно было
