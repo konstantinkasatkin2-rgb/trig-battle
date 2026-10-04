@@ -16,6 +16,10 @@ python-for-android умеет переиспользовать уже собра
 `tools/verify_apk.py` сравнивает манифест из APK с текущими файлами и
 обязана упасть, если внутри пакета что-то устаревшее.
 
+Заодно вычищается старый байт-код: Python берёт `.pyc`, если он есть
+рядом с `.py`, поэтому скомпилированная копия из прошлой сборки
+переживала любые правки и уезжала в APK вместо нового кода.
+
 Запуск (из корня репозитория):
     python .github/scripts/sync_game_files.py [каталог_установки]
 """
@@ -65,32 +69,70 @@ def write_manifest(dest_dir):
 
 
 def install_dirs(argv):
-    """Каталоги site-packages сборки, если дерево уже создано.
+    """Все каталоги дерева сборки, где может лежать код игры.
 
-    Путь не угадываем: p4a создаёт каталог python-installs не сразу под
-    platform/, а глубже (build-<arch>/build/python-installs), и с
-    изменением версий путь менялся. Раньше здесь был зашит неверный
-    адрес, и синхронизация молча ничего не делала, а в APK уезжал
-    старый код игры. Поэтому ищем все каталоги python-installs где
-    угодно под .buildozer и обновляем их все.
+    Путь не угадываем: p4a раскладывает модули по нескольким местам
+    (каталог установки python-installs, собранный бандл
+    _python_bundle, каталог приложения), и путь менялся от версии к
+    версии. Раньше здесь был зашит один неверный адрес — синхронизация
+    молча ничего не делала, и в APK уезжал старый код.
+
+    Поэтому ищем все каталоги под .buildozer, где уже есть файл с
+    именем одного из наших модулей. Каталог приложения (android/app)
+    пропускаем: им распоряжается buildozer, и код оттуда не
+    упаковывается.
     """
     if len(argv) > 1:
         return [argv[1]]
     base = os.path.join(ROOT, 'ready_apk', '.buildozer')
     if not os.path.isdir(base):
         return []
+    wanted = set(module_names())
+    # ищем и по .pyc: в уже собранном бандле лежат только скомпилированные
+    # файлы, и такой каталог тоже нужно обновить
+    wanted |= {name + 'c' for name in wanted}
     found = []
-    for dirpath, dirnames, _ in os.walk(base):
-        if os.path.basename(dirpath) != 'python-installs':
+    for dirpath, dirnames, filenames in os.walk(base):
+        norm = os.path.normpath(dirpath)
+        if norm.endswith(os.sep + 'android' + os.sep + 'app'):
+            dirnames[:] = []
             continue
-        for dist in sorted(dirnames):
-            dist_dir = os.path.join(dirpath, dist)
-            for arch in sorted(os.listdir(dist_dir)):
-                arch_dir = os.path.join(dist_dir, arch)
-                if os.path.isdir(arch_dir):
-                    found.append(arch_dir)
-        dirnames[:] = []          # внутрь python-installs не лезем
+        if wanted & set(filenames):
+            found.append(dirpath)
+            dirnames[:] = []              # глубше не лезем
     return found
+
+
+def module_names():
+    return [os.path.basename(ENTRY_MODULE)] + list(GAME_MODULES)
+
+
+def drop_stale_bytecode(dest):
+    """Удаляет скомпилированные версии наших модулей.
+
+    Python на Android берёт .pyc, если он есть, даже когда рядом лежит
+    более новый .py. Старый .pyc в закэшированном дереве переживал
+    любые правки кода: в APK уезжал байт-код первой сборки. Удаляем
+    .pyc и __pycache__, чтобы p4a скомпилировал текущий исходник.
+    """
+    removed = []
+    for name in module_names():
+        for stale in (name + 'c',):
+            path = os.path.join(dest, stale)
+            if os.path.exists(path):
+                os.remove(path)
+                removed.append(stale)
+    cache = os.path.join(dest, '__pycache__')
+    if os.path.isdir(cache):
+        # имя вида netgame.cpython-311.pyc — модуль стоит первым, до точки
+        bases = {os.path.splitext(n)[0] for n in module_names()}
+        hit = [f for f in os.listdir(cache) if f.split('.')[0] in bases]
+        for f in hit:
+            os.remove(os.path.join(cache, f))
+            removed.append('__pycache__/' + f)
+        if not os.listdir(cache):
+            os.rmdir(cache)
+    return removed
 
 
 def copy_into(dest):
@@ -98,10 +140,11 @@ def copy_into(dest):
     import shutil
     print('\nобновляю код игры в %s' % dest)
     for rel in (ENTRY_MODULE,) + GAME_MODULES:
-        src = os.path.join(ROOT, rel)
         name = os.path.basename(rel)
-        shutil.copy(src, os.path.join(dest, name))
+        shutil.copy(os.path.join(ROOT, rel), os.path.join(dest, name))
         print('   %s' % name)
+    removed = drop_stale_bytecode(dest)
+    print('   удалено устаревшее: %s' % (', '.join(removed) or 'ничего'))
     write_manifest(dest)
     print('   %s' % MANIFEST_NAME)
     # копирование молча ничего не делает, если путь перепущен: проверяем
@@ -116,6 +159,11 @@ def copy_into(dest):
                 fd.read().replace(b'\r\n', b'\n')).hexdigest()
         if got != digest:
             print('   ОШИБКА: %s в дереве не совпадает с исходником' % name)
+            return False
+        stale = path + 'c'
+        if os.path.exists(stale):
+            print('   ОШИБКА: %s остался рядом со свежим исходником — '
+                  'в APK уедет старый байт-код' % os.path.basename(stale))
             return False
     print('   проверено: все четыре модуля совпадают с исходником')
     return True

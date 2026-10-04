@@ -29,6 +29,7 @@
 """
 
 import hashlib
+import os
 from os.path import abspath, dirname, exists, join
 import shutil
 
@@ -123,6 +124,13 @@ class TrigbattleSrcRecipe(Recipe):
             path = self.find_module(module)
             shutil.copy(path, join(dest, module))
             info('trigbattle_src: {} -> {}'.format(module, dest))
+            # Рядом может лежать .pyc от прошлой сборки: Python берёт его
+            # вместо .py, и в APK уехал бы байт-код старой версии игры.
+            stale = join(dest, module + 'c')
+            if exists(stale):
+                os.remove(stale)
+                info('trigbattle_src: удалён устаревший {}'.format(
+                    module + 'c'))
         # Манифест сборки: контрольные суммы файлов, которые попали в APK.
         # По нему tools/verify_apk.py ловит случай, когда внутрь пакета
         # положен устаревший код (например, p4a переиспользовала

@@ -71,6 +71,14 @@ def main():
             with open(os.path.join(dest, name), 'w',
                       encoding='utf-8') as fd:
                 fd.write('# устаревшая версия\n')
+            # p4a кладёт рядом скомпилированную копию. Python берёт .pyc
+            # вместо .py, поэтому старый байт-код и переживал все правки.
+            with open(os.path.join(dest, name + 'c'), 'wb') as fd:
+                fd.write(b'stale bytecode')
+        os.makedirs(os.path.join(dest, '__pycache__'))
+        with open(os.path.join(dest, '__pycache__',
+                               'netgame.cpython-311.pyc'), 'wb') as fd:
+            fd.write(b'stale cache')
         p = subprocess.run([sys.executable, '.github/scripts/'
                             'sync_game_files.py'], cwd=work,
                            capture_output=True, text=True,
@@ -85,12 +93,32 @@ def main():
         check('устаревшая' not in fresh and 'net_my_angle' in fresh,
               'в дерево записан свежий код игры',
               'в дереве остался старый код игры')
+        check(not os.path.exists(os.path.join(dest,
+                                              'trig_battle_pygame.pyc')) and
+              not os.path.exists(os.path.join(dest, '__pycache__')),
+              'старый байт-код удалён, а не оставлен рядом с исходником',
+              'старый .pyc/__pycache__ остались в дереве')
         check(os.path.exists(os.path.join(dest, 'build_manifest.txt')),
               'манифест сборки записан в дерево',
               'манифест в дереве не появился')
         check('проверено: все четыре модуля совпадают' in out,
               'скрипт сам проверил результат по хешам',
               'скрипт не проверил, что копирование удалось')
+
+        # --- каталог приложения не трогаем: им распоряжается buildozer ---
+        app_dir = os.path.join(work, 'ready_apk', '.buildozer', 'android',
+                               'app')
+        os.makedirs(app_dir)
+        shutil.copy(os.path.join(work, 'ready_apk', 'main.py'),
+                    os.path.join(app_dir, 'main.py'))
+        p = subprocess.run([sys.executable, '.github/scripts/'
+                            'sync_game_files.py'], cwd=work,
+                           capture_output=True, text=True,
+                           encoding='utf-8', errors='replace')
+        check(not os.path.exists(os.path.join(app_dir, 'netgame.py')),
+              'каталог приложения buildozer не трогаем',
+              'скрипт влез в каталог приложения: %s'
+              % os.listdir(app_dir))
 
         # --- две архитектуры: обновляем обе ---
         dest2 = os.path.join(work, 'ready_apk', '.buildozer', 'android',
@@ -109,6 +137,25 @@ def main():
               'обновлены обе архитектуры',
               'вторая архитектура осталась старой')
 
+        # --- бандл, который p4a уже собрал раньше, тоже обновляем ---
+        bundle = os.path.join(work, 'ready_apk', '.buildozer', 'android',
+                              'platform', 'build-arm64-v8a', 'build',
+                              '_python_bundle', 'site-packages')
+        os.makedirs(bundle)
+        with open(os.path.join(bundle, 'trig_battle_pygame.pyc'), 'wb') as fd:
+            fd.write(b'stale bytecode')
+        p = subprocess.run([sys.executable, '.github/scripts/'
+                            'sync_game_files.py'], cwd=work,
+                           capture_output=True, text=True,
+                           encoding='utf-8', errors='replace')
+        out = p.stdout + p.stderr
+        check(not os.path.exists(os.path.join(
+                  bundle, 'trig_battle_pygame.pyc')) and
+              'net_my_angle' in open(os.path.join(
+                  bundle, 'trig_battle_pygame.py'), encoding='utf-8').read(),
+              'устаревший бандл очищен и обновлён',
+              'в бандле остался старый байт-код: %s' % out.strip()[-200:])
+
         # --- обратный контроль: прежний путь искал не там, где надо ---
         # Скрипт уже один раз ошибся именно так: искал
         # .buildozer/android/platform/python-installs, тогда как p4a
@@ -116,8 +163,8 @@ def main():
         # ловить этот путь, иначе она ничего не проверяет.
         with open(SYNC, encoding='utf-8') as fd:
             sync_src = fd.read()
-        check("os.path.basename(dirpath) != 'python-installs'" in sync_src,
-              'путь ищется обходом дерева, а не по одному адресу',
+        check('wanted & set(filenames)' in sync_src,
+              'каталоги ищутся обходом дерева, а не по одному адресу',
               'в скрипте вернулся путь, которого p4a не создаёт')
         check('android/platform/python-installs' not in sync_src,
               'старый неверный путь больше не используется',
@@ -126,6 +173,9 @@ def main():
         check('проверено: все четыре модуля' in sync_src,
               'копирование проверяется по хешам',
               'копирование ничем не проверяется')
+        check("name + 'c'" in sync_src and '__pycache__' in sync_src,
+              'старый байт-код вычищается из дерева',
+              'скрипт не трогает .pyc — они переживают правки кода')
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
