@@ -59,6 +59,25 @@ def verify(apk):
     print('  %s pygame в site-packages' % ('OK  ' if hit else 'НЕТ '))
     ok = ok and bool(hit)
 
+    # Разрешение INTERNET обязательно для игры по сети. Без него Android
+    # запрещает любую работу с сокетами, и кнопка «Создать игру» молча
+    # не работает (версия 0.2.3). Имена разрешений лежат в манифесте
+    # как UTF-16 строки.
+    manifest = z.read('AndroidManifest.xml')
+    need_perm = b'android.permission.INTERNET'.decode()
+    have_perm = need_perm.encode('utf-16-le') in manifest
+    print('  %s разрешение INTERNET в манифесте' % ('OK  ' if have_perm
+                                                    else 'НЕТ '))
+    ok = ok and have_perm
+
+    # Модули профилей и сети обязаны быть рядом с игрой: без них
+    # приложение упадёт с ImportError на старте.
+    for need in ('profiles', 'netgame'):
+        hit = [m for m in names if m.endswith('/' + need + '.pyc')
+               or m.endswith('/' + need + '.py')]
+        print('  %s %s.py в бандле' % ('OK  ' if hit else 'НЕТ ', need))
+        ok = ok and bool(hit)
+
     if not ok:
         sys.exit('\nОШИБКА: игра не попала в APK — приложение не запустится.\n'
                  'Проверьте рецепт p4a-recipes/trigbattle_src (он кладёт\n'

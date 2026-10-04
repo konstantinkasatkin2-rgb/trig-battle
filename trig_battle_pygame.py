@@ -2719,6 +2719,25 @@ class TrigBattle:
                           size, NAVY, 'mm')
         for wdg in self.widgets():
             wdg.draw(s)
+        self.draw_menu_msg(s)
+
+    def draw_menu_msg(self, s):
+        """Показывает последнее сообщение и на экранах меню.
+
+        Без этого ошибка на экране входа или сети была не видна нигде:
+        раньше сообщение рисовалось только в шапке игрового экрана, и
+        «кнопка не работает» выглядело как молчание.
+        """
+        text, color = self.msg
+        if not text:
+            return
+        size, lines = self.fit_lines(text, self.W - 2 * self.M,
+                                     int(clamp(0.024 * self.H, 11, 20)),
+                                     int(0.10 * self.H))
+        y = int(0.90 * self.H)
+        lh = int(size * 1.35)
+        for i, ln in enumerate(lines[-3:]):
+            blit_text(s, ln, (self.W // 2, y + i * lh), size, color, 'mm')
 
     # =========================================================
     #  ПРОФИЛИ: регистрация по почте, вход, ник, статистика

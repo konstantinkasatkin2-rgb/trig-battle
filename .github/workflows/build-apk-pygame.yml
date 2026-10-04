@@ -143,9 +143,36 @@ jobs:
           python -m pip install --upgrade pygame
           python tools/test_netgame.py
 
-      - name: Build APK
+      # release, а не debug, по двум причинам:
+      #   * подпись постоянным ключом из репозитория — новая версия
+      #     ставится поверх старой, а Google Play не считает приложение
+      #     подозрительным (debug-подпись каждый раз разная);
+      #   * APK меньше и быстрее собирается (символы вырезаются).
+      - name: Build APK (release)
         working-directory: ready_apk
-        run: buildozer android debug
+        run: buildozer android release
+
+      # Ключ подписи не должен меняться: иначе Android потребует сначала
+      # удалить старую версию, а установка будет выглядеть подозрительно.
+      - name: Check signing certificate
+        working-directory: ready_apk
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          CERT=$("$APKSIGNER" verify --print-certs dist/*.apk | grep -i "SHA-256 digest" | head -1 | sed 's/.*digest: //')
+          echo "отпечаток сертификата: $CERT"
+          if [ ! -f expected_cert.txt ]; then
+            echo "$CERT" > expected_cert.txt
+            echo "отпечаток сохранён в expected_cert.txt — следующие сборки"
+            echo "обязаны им подписываться"
+          elif ! grep -qF "$CERT" expected_cert.txt; then
+            echo "ОШИБКА: APK подписан другим ключом, чем предыдущие сборки."
+            echo "Пользователь не сможет обновиться поверх старой версии."
+            exit 1
+          else
+            echo "подпись совпадает с предыдущими сборками"
+          fi
 
       # buildozer называет файл package-version-arch-debug.apk.
       # Собираем из него один файл с понятным именем: <package>_<version>.apk

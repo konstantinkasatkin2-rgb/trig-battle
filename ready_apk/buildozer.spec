@@ -41,8 +41,11 @@ orientation = landscape
 # Поставьте 1, если хотите чистый полноэкранный режим без панели задач.
 fullscreen = 0
 
-# (list) Permissions — игре ничего не нужно (ни сети, ни геолокации)
-android.permissions =
+# (list) Permissions. INTERNET обязателен для игры по сети: без него
+# Android запрещает ЛЮБУЮ работу с сокетами, и создание игры падает с
+# «[Errno 1] Operation not permitted» — ровно так и случилось в 0.2.3.
+# Это обычное разрешение, диалога при установке не показывает.
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE
 
 # (int) Target / minimum Android API
 #android.api = 33
@@ -55,6 +58,20 @@ android.archs = arm64-v8a
 
 # (bool) Automatically accept Android SDK licenses (нужно для CI)
 android.accept_sdk_license = True
+
+# --- ПОДПИСЬ ---
+# Ключ лежит в репозитории намеренно: пока им подписан только этот
+# проект, а без него каждая сборка получает новый ключ, Google Play
+# считает приложение подозрительным, а обновление поверх старой версии
+# невозможно — приходится удалять старую и ставить заново.
+android.keystore = ./trigbattle.keystore
+android.keyalias = trigbattle
+android.storepassword = trigbattle
+android.keypassword = trigbattle
+# release-сборка подписывается этим ключом; и APK, и AAB — APK нужен,
+# потому что ставится напрямую с телефона, без Google Play.
+android.release_artifact = apk
+android.debug_artifact = apk
 
 # (str) Ветка python-for-android.
 # ВАЖНО: нельзя ставить develop — там python3 = 3.14, а рецепт pygame
