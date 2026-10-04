@@ -90,7 +90,7 @@ def main():
               % out.strip()[-200:])
         fresh = open(os.path.join(dest, 'trig_battle_pygame.py'),
                      encoding='utf-8').read()
-        check('устаревшая' not in fresh and 'point_is_mine' in fresh,
+        check('устаревшая' not in fresh and 'флот соперника скрыт' in fresh,
               'в дерево записан свежий код игры',
               'в дереве остался старый код игры')
         check(not os.path.exists(os.path.join(dest,
@@ -151,7 +151,7 @@ def main():
         out = p.stdout + p.stderr
         check(not os.path.exists(os.path.join(
                   bundle, 'trig_battle_pygame.pyc')) and
-              'point_is_mine' in open(os.path.join(
+              'флот соперника скрыт' in open(os.path.join(
                   bundle, 'trig_battle_pygame.py'), encoding='utf-8').read(),
               'устаревший бандл очищен и обновлён',
               'в бандле остался старый байт-код: %s' % out.strip()[-200:])

@@ -2054,7 +2054,6 @@ class TrigBattle:
     def choose_diff(self, diff):
         self.settings['difficulty'] = diff
         self.game['mode'] = 'ai'
-        self._net_widgets_apply()     # ушли из сети — все кнопки на месте
         self.reset_game()
         self.show_screen('game')
         self.set_msg('Сложность: %s. Расставьте флот на ЛЕВОМ поле и '
@@ -2062,7 +2061,6 @@ class TrigBattle:
 
     def start_local(self):
         self.game['mode'] = 'local'
-        self._net_widgets_apply()     # ушли из сети — все кнопки на месте
         self.reset_game()
         self.show_screen('game')
         self.set_msg('ЛОКАЛЬНАЯ ИГРА. Игрок 1 расставляет юниты на ЛЕВОМ '
@@ -2569,14 +2567,11 @@ class TrigBattle:
         lw = max(2, int(3 * u))
 
         # Оба угла и обе точки считаются из НАШИХ углов, поэтому и луч угла 1,
-        # и луч угла 2, и подписи sin/cos/tg/ctg — свои. Скрывается
-        # ровно одно: точка выстрела соперника (звезда, подпись и
-        # числа) и её проекция.
-        net = self.net_active()
+        # и луч угла 2, и подписи sin/cos/tg/ctg — свои. Точки P1 и P2
+        # тоже обе свои и независимые: по сети соперник присылает только
+        # координаты выстрела, поэтому его точек на нашем экране нет.
         on1 = self.shot_sel['p'] == 'P1'
-        # Какие точки реально нарисованы — для проверок и отладки: по
-        # одному только point_is_mine() нельзя отличить нарисованную
-        # звезду соперника от скрытой.
+        # Какие точки реально нарисованы — для проверок и отладки.
         self.aim_points_drawn = []
 
         # --- угол 1 ---
@@ -2630,7 +2625,7 @@ class TrigBattle:
         # Подпись ставится НАД точкой и мелким шрифтом, чтобы не закрывать её.
         lbl_size = max(8, int(10 * u))
         star_r = max(7, int(10 * u))
-        if self.state['P1'] is not None and self.point_is_mine('P1'):
+        if self.state['P1'] is not None:
             self.aim_points_drawn.append('P1')
             Px, Py = self.state['P1']
             fx, fy = px(Px, Py)
@@ -2638,7 +2633,7 @@ class TrigBattle:
             draw_star(s, col, fx, fy, star_r, max(2, int(2 * u)))
             self.aim_label(s, 'P1 = (%.2f, %.2f)' % (Px, Py), fx, fy, R,
                            col, lbl_size)
-        if self.state['P2'] is not None and self.point_is_mine('P2'):
+        if self.state['P2'] is not None:
             self.aim_points_drawn.append('P2')
             Qx, Qy = self.state['P2']
             fx, fy = px(Qx, Qy)
@@ -2647,12 +2642,12 @@ class TrigBattle:
             self.aim_label(s, 'P2 = (%.2f, %.2f)' % (Qx, Qy), fx, fy, R,
                            col, lbl_size)
 
-        # --- соединительные проекции (по сети — только к своей точке) ---
-        if tg2 is not None and (not net or on1):
+        # --- соединительные проекции ---
+        if tg2 is not None:
             Py = clamp(tg2 * c1, -1.0, 1.0)
             pygame.draw.line(s, faint(PURPLE, FADE), px(c1, s1), px(c1, Py),
                              max(1, int(2 * u)))
-        if ctg2 is not None and (not net or not on1):
+        if ctg2 is not None:
             Qx = clamp(ctg2 * s1, -1.0, 1.0)
             pygame.draw.line(s, faint(DKORANGE, FADE), px(c1, s1), px(Qx, s1),
                              max(1, int(2 * u)))
@@ -2663,16 +2658,14 @@ class TrigBattle:
             else 'нет'
         p2s = ('(%.2f, %.2f)' % self.state['P2']) if self.state['P2'] \
             else 'нет'
-        # Оба угла — свои, показываем оба. Чужая точка выстрела не
-        # показывается ни координатами, ни строкой.
+        # Оба угла и обе точки — свои, показываем и те и другие. Точек
+        # соперника на экране нет: он шлёт нам только координаты.
         lines = ['угол 1 = %5.1f°' % self.s1,
                  '  sin=%s cos=%s' % (f(s1), f(c1)),
                  'угол 2 = %5.1f°' % self.s2,
-                 '  tg =%s ctg=%s' % (f(tg2), f(ctg2))]
-        if self.point_is_mine('P1'):
-            lines.append('P1 = ' + p1s)
-        if self.point_is_mine('P2'):
-            lines.append('P2 = ' + p2s)
+                 '  tg =%s ctg=%s' % (f(tg2), f(ctg2)),
+                 'P1 = ' + p1s,
+                 'P2 = ' + p2s]
         text_box(s, lines, (R.right - 6 * self.u, R.y + 6 * self.u),
                  max(9, int(12 * u)), BLACK, WHITE,
                  BORDER, 'rt', False, None, 235, int(5 * self.u))
@@ -2956,30 +2949,10 @@ class TrigBattle:
         self.net_ready_sent = False
         self.net_peer_ready = False
         self.net_code = ''
-        self._net_widgets_apply()
 
     def net_active(self):
         """Идёт ли игра по сети: режим net и назначенная роль."""
         return self.game['mode'] == 'net' and self.net_role is not None
-
-    def point_is_mine(self, point):
-        """Эта точка выстрела — моя? По сети у каждого своя точка:
-        хост целится по P1, клиент — по P2. Точка соперника не рисуется
-        и не показывается в числах, какой бы она ни была."""
-        if not self.net_active():
-            return True
-        return point == ('P1' if self._net_my_turn() == 'player1' else 'P2')
-
-    def _net_widgets_apply(self):
-        """По сети убираем выбор точки выстрела.
-
-        Оба угла и оба поля ввода остаются: они свои. Прячем только
-        кнопки «Огонь P1/P2» — по сети точка выстрела задана тем, за
-        кого играешь, выбирать её нельзя.
-        """
-        net = self.net_active()
-        self.btn_shot1.visible = not net
-        self.btn_shot2.visible = not net
 
     def net_start_host(self):
         """Создать игру: получаем код, ждём соперника."""
@@ -3059,9 +3032,11 @@ class TrigBattle:
         self.game['mode'] = 'net'
         self.FL['name'] = 'Вы (%s)' % self.my_nick()
         self.FR['name'] = self.net_peer_nick
+        # Оба угла и обе точки — свои, поэтому выбор угла и точки
+        # остаётся за игроком: хоста — первый, клиента — второй, но
+        # выбрать можно любой из двух точек
         self.set_aim_sel(1 if self._net_my_turn() == 'player1' else 2)
         self.set_shot(self._net_my_turn())
-        self._net_widgets_apply()
         self.reset_game()
         self.show_screen('game')
         self.set_msg('Расставьте флот на ЛЕВОМ поле и нажмите «Готово». '
@@ -3199,7 +3174,9 @@ class TrigBattle:
             self.set_msg('Сейчас ход соперника', NAVY)
             return
         who = self._net_my_turn()
-        P = self.state['P1'] if who == 'player1' else self.state['P2']
+        # Обе точки (P1 и P2) — наши и независимые, стреляем по той,
+        # которую выбрали кнопками «Огонь P1/P2»
+        P = self.state[self.shot_sel['p']]
         if P is None:
             self.set_msg('Угол не определён (проверьте tg/ctg)', DKRED)
             return

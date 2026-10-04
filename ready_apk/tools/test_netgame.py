@@ -111,7 +111,9 @@ def main():
     # --- 2. флоты ---
     host.place_unit(host.FL, [(0.10, 0.20), (0.20, 0.20)], 0, 2, 'ship')
     cli.place_unit(cli.FL, [(0.50, 0.50), (0.60, 0.50)], 0, 2, 'ship')
-    check(len(host.FL['units']) == 1 and len(cli.FL['units']) == 1,
+    # второй корабль нужен, чтобы проверить выстрел по P2, не обрывая партию
+    cli.place_unit(cli.FL, [(0.15, 0.75), (0.25, 0.75)], 0, 2, 'ship')
+    check(len(host.FL['units']) == 1 and len(cli.FL['units']) == 2,
           'флоты расставлены', 'флот не расставлен')
 
     host.advance()
@@ -128,7 +130,7 @@ def main():
           'бой начался у обоих',
           'бой не начался (хост=%s, клиент=%s)'
           % (host.game['phase'], cli.game['phase']))
-    check(len(host.FR['units']) == 1 and len(cli.FR['units']) == 1,
+    check(len(host.FR['units']) == 2 and len(cli.FR['units']) == 1,
           'каждый получил флот соперника',
           'флот соперника не пришёл (хост=%d, клиент=%d)'
           % (len(host.FR['units']), len(cli.FR['units'])))
@@ -199,30 +201,22 @@ def main():
               'у %s не виден потопленный корабль соперника' % who)
         app_.FR['units'][0]['hits'] = set()
 
-    # У каждого своя точка выстрела: хост целится по P1, клиент — по P2.
-    # Точка соперника не рисуется, какая бы она ни была.
-    check(host.point_is_mine('P1') and not host.point_is_mine('P2'),
-          'у хоста своя точка P1, точка соперника скрыта',
-          'у хоста точки определены неверно')
-    check(cli.point_is_mine('P2') and not cli.point_is_mine('P1'),
-          'у клиента своя точка P2, точка соперника скрыта',
-          'у клиента точки определены неверно')
-
-    # И на экране рисуется ровно одна точка — своя. Проверяем по факту
-    # отрисовки, а не по признаку: звезда соперника должна отсутствовать.
-    for who, app_, mine in (('хост', host, 'P1'), ('клиент', cli, 'P2')):
+    # Обе точки (P1 и P2) считаются из НАШИХ углов, поэтому обе наши и
+    # независимые: видны обе, и стрелять можно по любой из них.
+    # Проверяем по факту отрисовки, а не по признаку.
+    for who, app_ in (('хост', host), ('клиент', cli)):
         app_.state['P1'] = (0.31, 0.42)
         app_.state['P2'] = (-0.17, 0.28)
-        app_.set_shot(mine)
+        app_.set_shot('P1')
         app_.draw()
         drawn = list(app_.aim_points_drawn)
-        check(drawn == [mine],
-              'у %s на поле нарисована только своя точка %s (нарисовано %r)'
-              % (who, mine, drawn),
-              'у %s нарисованы чужие точки: %r' % (who, drawn))
+        check(drawn == ['P1', 'P2'],
+              'у %s нарисованы обе точки, P1 и P2 (нарисовано %r)'
+              % (who, drawn),
+              'у %s нарисованы не обе точки: %r' % (who, drawn))
 
-    # Оба угла и оба поля — свои, поэтому на экране они все на месте.
-    # Прячем только выбор точки выстрела: по сети она задана.
+    # Оба угла, оба поля ввода и выбор точки огня — на месте: по сети
+    # ничего скрывать не нужно, у нас всё своё.
     for who, app_ in (('хост', host), ('клиент', cli)):
         check(all(w.visible for w in app_.row_angles[:6]),
               'у %s оба ползунка углов на месте' % who,
@@ -234,23 +228,9 @@ def main():
         check(app_.btn_aim1.visible and app_.btn_aim2.visible,
               'у %s выбор угла для поля доступен' % who,
               'у %s кнопки выбора угла скрыты' % who)
-        check(not app_.btn_shot1.visible and not app_.btn_shot2.visible,
-              'у %s выбор точки выстрела скрыт' % who,
-              'у %s виден выбор чужой точки выстрела' % who)
-
-    # После выхода из сетевой игры кнопки точки выстрела возвращаются.
-    # Роль и режим временно меняем «в памяти», соединение не трогаем — ниже
-    # ещё нужен полный бой.
-    saved_mode = cli.game['mode']
-    cli.game['mode'] = 'local'
-    cli.net_role = None
-    cli._net_widgets_apply()
-    check(cli.btn_shot1.visible and cli.btn_shot2.visible,
-          'после выхода из сети кнопки огня на месте',
-          'после выхода из сети кнопки огня пропали')
-    cli.game['mode'] = saved_mode
-    cli.net_role = 'client'
-    cli._net_widgets_apply()
+        check(app_.btn_shot1.visible and app_.btn_shot2.visible,
+              'у %s можно выбрать точку огня P1 или P2' % who,
+              'у %s выбор точки выстрела скрыт' % who)
 
     # --- 4. выстрел: целимся точно в клетку флота соперника ---
     target = (0.50, 0.50)
@@ -275,6 +255,30 @@ def main():
           'у клиента сейчас ход соперника (ждём, turn=%s)'
           % cli.game['turn'], 'у клиента неверный ход: %s'
           % cli.game['turn'])
+
+    # --- 4b. стреляем по выбранной точке: P1 и P2 независимы ---
+    # Выбираем P2 и целимся во вторую клетку флота клиента, оставляя P1
+    # увести в сторону: попадание должно прийти именно по P2.
+    host.set_shot('P2')
+    host.state['P1'] = (-0.60, -0.60)          # в сторону, не в флот
+    host.state['P2'] = (0.15, 0.75)
+    check(host.shot_sel['p'] == 'P2', 'выбрана точка P2',
+          'выбрана не та точка: %s' % host.shot_sel['p'])
+    host._net_fire()
+    for _ in range(120):
+        cli._net_poll()
+        cli.draw()
+        hit = any((0.15, 0.75) in un['hits'] for un in cli.FL['units'])
+        if hit or cli.game['phase'] == 'over':
+            break
+        time.sleep(0.02)
+    hit = any((0.15, 0.75) in un['hits'] for un in cli.FL['units'])
+    check(hit, 'выстрел по P2 попал туда, куда указывала P2',
+          'выстрел по P2 не попал: у клиента попаданий %r'
+          % [p for un in cli.FL['units'] for p in un['hits']])
+    check(host.game['turn'] == host._net_my_turn(),
+          'после попадания по P2 ход остаётся у стрелка',
+          'ход ушёл сопернику после выстрела по P2')
 
     # --- 5. промах: ход переходит к сопернику ---
     host.update_angles()
@@ -305,13 +309,15 @@ def main():
         host.draw()
         if host.game['turn'] == host._net_my_turn():
             break
-        time.sleep(0.02)
+            time.sleep(0.02)
     check(host.game['turn'] == host._net_my_turn(),
           'после промаха клиента ход вернулся хосту', 'хост не получил ход')
 
-    for cell in [(0.60, 0.50)]:               # последняя клетка флота клиента
+    # добиваем оставшиеся клетки обоих кораблей клиента
+    for cell in [(0.60, 0.50), (0.25, 0.75)]:
         host.update_angles()
-        host.state['P1'] = cell
+        # стреляем по выбранной точке: раньше выбирали P2
+        host.state[host.shot_sel['p']] = cell
         host._net_fire()
         # ждём конца у ОБЕИХ сторон: ход заканчивается по разному
         for _ in range(150):
