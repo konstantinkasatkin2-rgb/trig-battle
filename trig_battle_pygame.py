@@ -4292,9 +4292,9 @@ class TrigBattle:
                                    int(0.11 * sc), max(2, int(3 * u)))
 
         # прицел: свои углы рисуем ТОЛЬКО на поле врага — там, куда
-        # летят выстрелы. Показываем уже на расстановке, а не только
-        # в бою: так видно, куда целиться.
-        if self.mode['name'] == 'angles' and side == self.aim_side():
+        # летят выстрелы. Показываем и на расстановке, и в бою, и при
+        # любом виде фигур: без луча не видно, куда целиться.
+        if side == self.aim_side():
             self.draw_aim(s, side, px)
 
 
@@ -4444,11 +4444,6 @@ class TrigBattle:
                       NAVY, 'mm', True)
             blit_text(s, 'морской бой', (cx, int(0.15 * H) + int(t * 1.2)),
                       t, NAVY, 'mm', True)
-            size, lines = self.fit_lines(
-                'выстрел — точка пересечения tg и cos (P1) либо ctg и sin (P2)',
-                W - 2 * self.M, int(16 * u), int(40 * u))
-            blit_text(s, lines[0] if lines else '', (cx, int(0.245 * H)),
-                      size, DGRAY, 'mm')
         elif name == 'difficulty':
             # надписей над кнопками режимов больше нет: текст
             # «С компьютером» / «Вдвоём на экране» относился к старому
