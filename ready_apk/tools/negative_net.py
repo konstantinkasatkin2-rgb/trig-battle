@@ -97,8 +97,8 @@ CASES = [
      'ходы не тратятся'),
     # --- новый режим (0.5.0): видимость, стройка в бою, размер, сеть ---
     ('показываем чужие фигуры без столкновения',
-     '        return self.car_owner(un) == self.car_side_of_fld(',
-     '        return True or self.car_owner(un) == self.car_side_of_fld(',
+     '        return self.car_owner(un) == self.car_viewer() or \\',
+     '        return True or self.car_owner(un) == self.car_viewer() or \\',
      'чужая стена видна до столкновения'),
     ('забываем раскрыть стену при таране',
      "            hit[0]['revealed'] = True",

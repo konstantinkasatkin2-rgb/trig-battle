@@ -120,6 +120,37 @@ def main():
           'выстрел обработан (%s)' % ai.game['last'],
           'выстрел не обработан')
 
+    # --- скрытность чужого флота: и против ИИ, и в локальной игре ---
+    # Просьба игрока: чужого флота видеть нельзя, пока он не подбит.
+    app = g.TrigBattle()
+    app.layout(1280, 720)
+    app.build_ui()
+    app.show_screen('game')
+    app.choose_diff('Низкий')
+    app.place_unit(app.FR, [(0.4, 0.4), (0.5, 0.4)], 0, 2, 'ship')
+    foe = app.FR['units'][0]
+    app.game['phase'] = 'battle'
+    app.game['mode'] = 'ai'
+    app.game['turn'] = 'player1'
+    check(not app.unit_visible(foe, app.FR),
+          'против ИИ чужой флот скрыт',
+          'против ИИ виден чужой флот')
+    app.FR['units'][-1]['hits'] = set(app.FR['units'][-1]['pts'])
+    check(app.unit_visible(app.FR['units'][-1], app.FR),
+          'против ИИ потопленный корабль виден',
+          'против ИИ не виден потопленный корабль')
+    app.FR['units'][-1]['hits'] = set()      # снова в строю
+    app.game['mode'] = 'local'
+    app.game['turn'] = 'player1'
+    check(not app.unit_visible(foe, app.FR),
+          'в локальной игре флот соперника скрыт на его ходу',
+          'в локальной игре виден флот соперника')
+    app.game['turn'] = 'player2'
+    check(app.unit_visible(foe, app.FR),
+          'в локальной игре виден только свой флот',
+          'в локальной игре не виден собственный флот')
+    app.game['turn'] = 'player1'
+
     # --- меню и профиль рисуются после всех этих правок ---
     menu = g.TrigBattle()
     draw_frames(menu)

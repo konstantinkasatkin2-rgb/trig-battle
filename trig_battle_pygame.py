@@ -1620,6 +1620,16 @@ class TrigBattle:
             return 'R' if self.game['turn'] == mine else None
         return 'R' if self.game['turn'] == 'player1' else 'L'
 
+    def aim_side(self):
+        """Поле, на котором показываются наши углы и точки пересечения.
+
+        Всегда поле СОПЕРНИКА: на своём поле стрелять некуда, поэтому
+        луч угла рисуем только там, куда уходят выстрелы.
+        """
+        if self.car_mode():
+            return None
+        return 'L' if self.target_fld() is self.FL else 'R'
+
     def cur_type(self):
         if self.car_mode():
             fld = self.build_fld()
@@ -2966,6 +2976,33 @@ class TrigBattle:
         self.set_msg('Выбрано фигур: %d. «Совершить ход» — двинуть '
                      'их на клетку' % len(sel), NAVY)
 
+    def car_rotate(self, step=1):
+        """Кнопка «Поворот»: развернуть выбранные фигуры на 45°.
+
+        Поворачиваются и машинки, и стены — у стены направление задаёт
+        её форму. Если ничего не выбрано, поворачивается курс следующей
+        фигуры: так направление задаётся при расстановке.
+        """
+        sel = [un for un in (self.unit_state.get('sel_cars') or [])
+               if un.get('fld') is not None]
+        one = self.unit_state.get('selected')
+        if not sel and one is not None and one.get('fld') is not None:
+            sel = [one]
+        if not sel:
+            self.unit_state['dir_idx'] = \
+                (self.unit_state['dir_idx'] + step) % 8
+            self.set_msg('Курс следующей фигуры: %d°'
+                         % int(self.unit_state['dir_idx'] * 45), NAVY)
+            return
+        names = []
+        for un in sel:
+            un['dir'] = (un['dir'] + step) % 8
+            names.append('машинка' if un['type'] == 'car' else 'стена')
+        self.set_msg('Повёрнуто: %s, направление %d°'
+                     % (', '.join(names), sel[0]['dir'] * 45), DGREEN)
+        self.cars_tutorial_hit('rotate')
+        self.cars_after_change()
+
     def car_clear_sel(self):
         self.unit_state['sel_cars'] = []
         self.unit_state['selected'] = None
@@ -3325,18 +3362,19 @@ class TrigBattle:
                   self.btn_mode_planes):
             if w is not None:
                 w.visible = not cars
-        for i, b in enumerate(self.size_buttons):
+        for b in self.size_buttons:
             # длину в новом режиме рисует своя панель (draw_cars_controls)
             b.visible = not cars
         for w in self.row_cars:
             w.visible = cars
         if self.btn_wait is not None:
             self.btn_wait.visible = cars
-        # весь третий ряд в новом режиме заменён своей панелью: ни
-        # режимов фигур, ни размеров, ни «Поворота» тут не нужно
+        # в новом режиме третий ряд заменён своей панелью: ни режимов
+        # фигур, ни размеров, ни «Поворота» тут не нужно. В
+        # тригонометрическом режиме ряд возвращается целиком.
         for w in self.row_build:
             if w is not None:
-                w.visible = False
+                w.visible = not cars
         # «Сброс углов» в новом режиме бессмыслен — углов тут нет
         if self.btn_reset_ang is not None:
             self.btn_reset_ang.visible = not cars
@@ -3460,29 +3498,40 @@ class TrigBattle:
                               int(half * 2), int(half * 2)),
                              max(1, int(2 * u)))
 
-    def car_seen(self, un, side):
-        """Видна ли фигура на этом поле.
+    def car_seen(self, un, side=None):
+        """Видна ли фигура тому, кто сейчас смотрит на поле.
 
-        Свои фигуры видны всегда. Чужие — только после
-        столкновения: пока машинка не врезалась в стену, стены
-        соперника не видно, и наоборот — чужая машинка становится
-        видимой, когда ломает препятствие.
+        Свои фигуры видны всегда — свои машинки стоят на поле СОПЕРНИКА,
+        а свои стены на своём, так что «чьё это поле» тут не годится:
+        раньше именно поэтому собственные машинки были не видны.
+
+        Чужие фигуры проявляются только после столкновения: пока
+        машинка не врезалась в стену, стены соперника не видно, и
+        наоборот.
         """
-        return self.car_owner(un) == self.car_side_of_fld(
-            self.FL if side == 'L' else self.FR) or \
+        if self.game['phase'] == 'over':
+            return True
+        return self.car_owner(un) == self.car_viewer() or \
             bool(un.get('revealed'))
+
+    def car_viewer(self):
+        """Чьи фигуры считаются своими для того, кто смотрит сейчас."""
+        mine = self.car_my_side()
+        if mine is not None:
+            return mine
+        # локальная игра: смотрит тот, чей ход (при расстановке — тот,
+        # кто ставит)
+        return self.game.get('turn', 'player1')
 
     def car_draw_field_units(self, s, side):
         """Фигуры этого поля: свои и раскрытые чужие."""
         fld = self.FL if side == 'L' else self.FR
         for un in fld['units']:
-            if un['type'] == 'car':
-                self.car_draw_car(s, un, side)
-            else:
-                self.car_draw_wall(s, un, side)
-        other = self.FR if fld is self.FL else self.FL
-        for un in other['units']:
-            # чужие фигуры видны только после столкновения (car_seen)
+            # фигура рисуется только на поле, где она стоит: раньше
+            # сверху обходилось ещё и второе поле, и машинка с поля
+            # врага дублировалась на своём — казалось, что машинки
+            # ставят сразу на обоих полях. Свои фигуры видны всегда,
+            # чужие — только после столкновения (car_seen).
             if not self.car_seen(un, side):
                 continue
             if un['type'] == 'car':
@@ -3906,7 +3955,7 @@ class TrigBattle:
         self.btn_car_cars.active = kind == 'car'
         self.btn_car_walls.active = kind == 'wall'
         x = M
-        for b in (self.btn_car_cars, self.btn_car_walls):
+        for b in (self.btn_car_cars, self.btn_car_walls, self.btn_car_turn):
             w = font(b.size, b.bold).size(b.label)[0] + int(26 * u)
             b.rect = pygame.Rect(int(x), int(cy1), int(w), h)
             x += w + gap
@@ -3950,8 +3999,7 @@ class TrigBattle:
                          else 'ПРАВОЕ'),
                       (xr + gap, cy2 + h // 2),
                       max(9, int(13 * u)), DGRAY, 'lm')
-        for b in (self.btn_car_cars, self.btn_car_walls, self.btn_ready,
-                  self.btn_commit, self.btn_exit):
+        for b in self.row_cars:
             b.draw(s)
         for b in self.size_buttons[:CAR_MAX_LEN]:
             b.draw(s)
@@ -4243,12 +4291,10 @@ class TrigBattle:
                 pygame.draw.circle(s, ORANGE, (int(fx), int(fy)),
                                    int(0.11 * sc), max(2, int(3 * u)))
 
-        # прицел: луч и точки пересечения показываем всегда, когда
-        # вид фигур — «Углы». Раньше они появлялись только в бою, и в
-        # расстановке игрок не видел, куда вообще целиться.
-        if self.mode['name'] == 'angles' and \
-                (self.game['phase'] != 'battle' or
-                 self.active_side() == side):
+        # прицел: свои углы рисуем ТОЛЬКО на поле врага — там, куда
+        # летят выстрелы. Показываем уже на расстановке, а не только
+        # в бою: так видно, куда целиться.
+        if self.mode['name'] == 'angles' and side == self.aim_side():
             self.draw_aim(s, side, px)
 
 
@@ -4266,6 +4312,7 @@ class TrigBattle:
         on1 = self.shot_sel['p'] == 'P1'
         # Какие точки реально нарисованы — для проверок и отладки.
         self.aim_points_drawn = []
+        self.aim_sides_drawn = []      # на каких полях рисуется прицел
 
         # --- угол 1 ---
         pygame.draw.line(s, PURPLE, px(0, 0), px(c1, s1), lw)
@@ -4318,6 +4365,7 @@ class TrigBattle:
         # Подпись ставится НАД точкой и мелким шрифтом, чтобы не закрывать её.
         lbl_size = max(8, int(10 * u))
         star_r = max(7, int(10 * u))
+        self.aim_sides_drawn.append(side)
         if self.state['P1'] is not None:
             self.aim_points_drawn.append('P1')
             Px, Py = self.state['P1']
@@ -4462,12 +4510,23 @@ class TrigBattle:
                               size, BLACK, 'mm', i == 0)
         elif name == 'stats':
             t2 = int(clamp(0.026 * H, 13, 24))
-            y = int(0.10 * H)
-            for line in self.stats_text():
+            lh = int(t2 * 1.5)
+            y = int(0.09 * H)
+            lines = self.stats_text()
+            for line in lines:
                 head = bool(line) and line.isupper()
                 blit_text(s, line, (cx, y), t2,
                           NAVY if head else BLACK, 'mm', head)
-                y += int(t2 * 1.5)
+                y += lh
+            # кнопки строго под текстом: раньше они стояли на
+            # фиксированной высоте и закрывали нижние строки
+            btns = self.widgets()
+            gap_b = int(10 * u)
+            y += int(12 * u)
+            for i, wdg in enumerate(btns):
+                h = wdg.rect.h
+                wdg.rect = pygame.Rect(wdg.rect.x, y + i * (h + gap_b),
+                                       wdg.rect.w, h)
         elif name == 'net':
             blit_text(s, 'Игра по сети', (cx, int(0.13 * H)),
                       int(clamp(0.034 * H, 18, 32)), NAVY, 'mm', True)
@@ -4482,8 +4541,8 @@ class TrigBattle:
                       int(clamp(0.028 * H, 15, 26)), NAVY, 'mm', True)
             code = self.net_code or '—'
             big = int(clamp(0.11 * H, 40, 104))
-            box = pygame.Rect(0, 0, int(0.62 * W), int(big * 1.9))
-            box.center = (cx, self._net_code_y + int(big))
+            box = pygame.Rect(0, 0, int(0.62 * W), int(big * 1.7))
+            box.center = (cx, self._net_code_y + int(big * 0.85))
             pygame.draw.rect(s, WHITE, box, border_radius=10)
             pygame.draw.rect(s, BORDER, box, 2, border_radius=10)
             blit_text(s, code, box.center, big, BLACK, 'mm', True)
@@ -4491,10 +4550,16 @@ class TrigBattle:
                 'Пока соперник не подключился. Передайте ему этот код — '
                 'он введёт его в пункте «Подключиться по коду».',
                 W - 2 * self.M, int(clamp(0.022 * H, 11, 19)),
-                int(0.62 * H) - int(0.02 * H))
+                int(0.20 * H))
+            ytxt = int(0.62 * H)
             for i, ln in enumerate(lines):
-                blit_text(s, ln, (cx, int(0.66 * H) + i * int(size * 1.4)),
+                blit_text(s, ln, (cx, ytxt + i * int(size * 1.4)),
                           size, DGRAY, 'mm')
+            # «Отмена» — под текстом, а не поверх него
+            ybtn = ytxt + len(lines) * int(size * 1.4) + int(10 * u)
+            for wdg in self.widgets():
+                wdg.rect = pygame.Rect(wdg.rect.x, ybtn, wdg.rect.w,
+                                       wdg.rect.h)
             size, lines = self.fit_lines(
                 'Ваш IP в этой сети: %s' % (
                     netgame.local_ip() if netgame else '—'),
@@ -5291,12 +5356,17 @@ class TrigBattle:
         self.screens['register'] = rg
 
         # --- статистика игрока ---
+        # Прямоугольники кнопок задаёт draw_menu_screen: строк в
+        # сводке много, и кнопки наезжали на нижние из них.
         stt = []
-        yst = int(0.20 * H)
-        btn(stt, fx, yst, fw, fh, 'Обновить', self.open_stats, LTBLUE, 19)
-        yst += fh + gap
-        btn(stt, fx, yst, fw, fh, 'В меню',
-            lambda: self.show_screen('menu'), (215, 215, 215), 19)
+        self._stats_btn_rects = (
+            pygame.Rect(fx, int(0.74 * H), fw, fh),
+            pygame.Rect(fx, int(0.74 * H) + fh + gap, fw, fh))
+        stt.append(Button(self._stats_btn_rects[0], 'Обновить',
+                          self.open_stats, LTBLUE, max(12, int(19 * u))))
+        stt.append(Button(self._stats_btn_rects[1], 'В меню',
+                          lambda: self.show_screen('menu'),
+                          (215, 215, 215), max(12, int(19 * u))))
         self.screens['stats'] = stt
 
         # --- профиль (вошедший) ---
@@ -5328,7 +5398,7 @@ class TrigBattle:
 
         # --- хост: показ кода ---
         nh = []
-        self._net_code_y = int(0.30 * H)
+        self._net_code_y = int(0.22 * H)
         btn(nh, fx, int(0.62 * H), fw, bh, 'Отмена', self.net_cancel,
             LTRED, 20)
         self.screens['net_host'] = nh
@@ -5545,16 +5615,22 @@ class TrigBattle:
         self.btn_commit = Button(
             pygame.Rect(0, cy3, max(int(small), 190), small),
             'Совершить ход', self.car_make_move, (255, 232, 150), f16, True)
+        self.btn_car_turn = Button(
+            pygame.Rect(0, cy3, max(int(small), 140), small), 'Поворот',
+            lambda: self.car_rotate(1), LTRED, f16)
         self.btn_exit = Button(
             pygame.Rect(0, cy3, max(int(small), 120), small), 'Выход',
             lambda: self.show_screen('menu'), (215, 215, 215), f16)
         self.row_cars = [self.btn_car_cars, self.btn_car_walls,
-                         self.btn_ready, self.btn_commit, self.btn_exit]
+                         self.btn_car_turn, self.btn_ready, self.btn_commit,
+                         self.btn_exit]
         for b in self.row_cars:
             b.visible = False
 
+        # панель нового режима тоже должна быть нажимаемой: без неё
+        # кнопки рисуются, но не откликаются
         self.game_widgets = (self.row_angles + self.row_build +
-                             self.row_battle)
+                             self.row_battle + self.row_cars)
         self.screens['game'] = self.game_widgets
 
         self.set_mode(self.mode['name'])

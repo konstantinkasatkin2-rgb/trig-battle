@@ -402,6 +402,8 @@ def main():
     car = cars[0]
     car['pts'] = [(0.2, 0.4)]
     car['dir'] = 0
+    # смотрим глазами соперника: у него эта стена чужая
+    app.game['turn'] = 'player2'
     check(not app.car_seen(wall, 'R'),
           'чужая стена не видна до столкновения',
           'чужая стена видна заранее')
@@ -462,16 +464,20 @@ def main():
         app.place_unit(app.FL, [(0.4, 0.4)], 0, 1, 'wall')
         walls = [app.FL['units'][-1]]
     wall = walls[0]
+    app.game['turn'] = 'player2'      # смотрим глазами соперника
     check(not app.car_seen(wall, 'R'),
           'чужая стена на чужом поле скрыта, пока не врезались',
           'чужая стена видна до столкновения')
+    check(not app.car_seen(app.car_owner_cars('player1')[0], 'L'),
+          'чужая машинка скрыта, пока не врезалась',
+          'чужая машинка видна сразу')
+    app.game['turn'] = 'player1'      # смотрим глазами хозяина
     check(app.car_seen(wall, 'L'),
           'на своём поле стена видна',
           'на своём поле стена скрыта')
-    enemy_cars = app.car_owner_cars('player2')
-    check(not app.car_seen(enemy_cars[0], 'L'),
-          'чужая машинка скрыта, пока не врезалась',
-          'чужая машинка видна сразу')
+    check(app.car_seen(app.car_owner_cars('player1')[0], 'R'),
+          'своя машинка на поле врага видна',
+          'своя машинка на поле врага не видна')
 
     # --- 13. размер машинки = примерно клетка ---
     app = battle_app()
@@ -807,7 +813,8 @@ def main():
           'третий ряд (режимы, размеры, поворот) в новом режиме скрыт',
           'в новом режиме видны лишние кнопки: %s' % left_over)
     names = [b.label for b in app.row_cars]
-    check(names == ['Машинки', 'Стены', 'Готов', 'Совершить ход', 'Выход'],
+    check(names == ['Машинки', 'Стены', 'Поворот', 'Готов',
+                    'Совершить ход', 'Выход'],
           'у нового режима своя панель: %s' % ', '.join(names),
           'панель нового режима неверная: %s' % ', '.join(names))
     check(app.btn_exit.rect.right <= app.W
@@ -922,6 +929,92 @@ def main():
     check('Статистика' not in [w.label for w in app.screens['menu']],
           'после выхода кнопка статистики исчезает',
           'кнопка «Статистика» осталась после выхода из профиля')
+
+    # --- 25a. кнопки панели нажимаются (иначе меню «не работает») ---
+    app = battle_app()
+    app.draw()          # положение кнопок панели задаётся при отрисовке
+    clickable = [w.label for w in app.game_widgets if w in app.row_cars]
+    check(clickable == ['Машинки', 'Стены', 'Поворот', 'Готов',
+                        'Совершить ход', 'Выход'],
+          'все кнопки панели нажимаемые: %s' % ', '.join(clickable),
+          'панель нарисована, но не нажимается: %s' % ', '.join(clickable))
+    car = app.car_owner_cars('player1')[0]
+    app.car_select(car)
+    d0 = car['dir']
+    c = app.btn_car_turn.rect.center
+    app.on_down(c, 1)
+    app.on_up(c, 1)
+    check(car['dir'] == (d0 + 1) % 8,
+          'кнопка «Поворот» поворачивает машинку на 45°',
+          '«Поворот» не сработал: направление %d -> %d' % (d0, car['dir']))
+
+    # --- 25b. фигура рисуется только на том поле, где стоит ---
+    app = battle_app(cars=2)
+    app.game['turn'] = 'player1'
+    shown = {}
+    for fld, nm in ((app.FL, 'L'), (app.FR, 'R')):
+        shown[nm] = [un for un in fld['units']
+                     if app.car_seen(un, nm)]
+    own_r = [un for un in shown['R'] if un in app.car_owner_cars('player1')]
+    check(own_r and not [u for u in shown['L']
+                         if u in app.car_owner_cars('player1')],
+          'свои машинки видны только на поле врага',
+          'машинки нарисованы не на своём месте: %s / %s'
+          % (len(shown['L']), len(shown['R'])))
+    check(not [u for u in shown['L'] if u in app.car_owner_cars('player2')],
+          'чужие машинки скрыты туманом войны',
+          'чужие машинки видны сразу')
+
+    # --- 25c. углы тригонометрии только на поле врага ---------------
+    app = new_app()
+    app.choose_diff('Средний')
+    app.set_mode('angles')
+    app.set_angle1(35)
+    app.set_angle2(70)
+    app.update_angles()
+    check(app.aim_side() == 'R',
+          'углы показываются на правом (вражеском) поле: %s'
+          % app.aim_side(),
+          'поле с углами определено неверно: %s' % app.aim_side())
+    app.draw()
+    check(app.aim_sides_drawn == ['R'],
+          'прицел нарисован только на поле врага: %s'
+          % app.aim_sides_drawn,
+          'прицел нарисован не там: %s' % app.aim_sides_drawn)
+    check(app.aim_points_drawn == ['P1', 'P2'],
+          'обе точки пересечения нарисованы: %s' % app.aim_points_drawn,
+          'точки пересечения не нарисованы: %s' % app.aim_points_drawn)
+    check(all(w.visible for w in app.row_build if w is not None),
+          'в тригонометрическом режиме третий ряд на месте',
+          'в тригонометрическом режиме пропали кнопки третьего ряда')
+
+    # --- 25d. кнопки не наезжают на текст ---------------------------
+    app = new_app()
+    app.profile_db = Profiles(os.path.join(
+        tempfile.mkdtemp(), 'stats2.db'))
+    app.set_user(app.profile_db.register('b@b.ru', 'pass1234', 'Текст'))
+    app.open_stats()
+    app.draw()
+    t2 = int(clamp(0.026 * app.H, 13, 24))
+    text_bottom = int(0.09 * app.H) + len(app.stats_text()) * int(t2 * 1.5)
+    check(all(w.rect.top >= text_bottom for w in app.widgets()),
+          'кнопки статистики ниже текста',
+          'кнопки наезжают на текст статистики: %s'
+          % [(w.label, w.rect.top, text_bottom) for w in app.widgets()])
+    app.net_code = 'AB12C'
+    app.show_screen('net_host')
+    app.draw()
+    size, lines = app.fit_lines(
+        'Пока соперник не подключился. Передайте ему этот код — '
+        'он введёт его в пункте «Подключиться по коду».',
+        app.W - 2 * app.M, int(clamp(0.022 * app.H, 11, 19)),
+        int(0.20 * app.H))
+    text_bottom_net = int(0.62 * app.H) + len(lines) * int(size * 1.4)
+    check(all(w.rect.top >= text_bottom_net for w in app.widgets()),
+          '«Отмена» на экране ожидания ниже текста',
+          '«Отмена» наезжает на текст: %s < %s'
+          % ([(w.label, w.rect.top) for w in app.widgets()],
+             text_bottom_net))
 
     # --- 26. версия ---
     spec = io.open(os.path.join(ROOT, 'ready_apk', 'buildozer.spec'),
