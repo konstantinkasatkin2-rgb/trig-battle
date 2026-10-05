@@ -188,6 +188,9 @@ class Profiles:
                     losses     INTEGER DEFAULT 0,
                     shots      INTEGER DEFAULT 0,
                     hits       INTEGER DEFAULT 0,
+                    moves      INTEGER DEFAULT 0,
+                    misses     INTEGER DEFAULT 0,
+                    hints      INTEGER DEFAULT 0,
                     updated_at TEXT
                 )''')
             conn.execute('''
@@ -197,6 +200,22 @@ class Profiles:
                     created_at TEXT NOT NULL
                 )''')
             conn.commit()
+            self._migrate()
+
+    def _migrate(self):
+        """Добавляет новые счётчики в базу, созданную прошлой версией."""
+        try:
+            with sqlite3.connect(self.path) as conn:
+                have = set()
+                for row in conn.execute('PRAGMA table_info(stats)'):
+                    have.add(row[1])
+                for col in ('moves', 'misses', 'hints'):
+                    if col not in have:
+                        conn.execute('ALTER TABLE stats ADD COLUMN %s '
+                                     'INTEGER DEFAULT 0' % col)
+                conn.commit()
+        except sqlite3.Error:
+            pass
 
     # ---------------- регистрация и вход ----------------
     def register(self, email, password, nickname):
@@ -297,17 +316,21 @@ class Profiles:
 
     # ---------------- статистика ----------------
     def get_stats(self, user_id):
+        """Статистика игрока: игры, победы, ходы, попадания, промахи,
+        подсказки."""
         with sqlite3.connect(self.path) as conn:
             row = conn.execute('''
-                SELECT games, wins, losses, shots, hits FROM stats
+                SELECT games, wins, losses, shots, hits,
+                       moves, misses, hints FROM stats
                 WHERE user_id = ?''', (user_id,)).fetchone()
+        keys = ('games', 'wins', 'losses', 'shots', 'hits',
+                'moves', 'misses', 'hints')
         if row is None:
-            return {'games': 0, 'wins': 0, 'losses': 0, 'shots': 0,
-                    'hits': 0}
-        return {'games': row[0], 'wins': row[1], 'losses': row[2],
-                'shots': row[3], 'hits': row[4]}
+            return dict.fromkeys(keys, 0)
+        return dict(zip(keys, row))
 
     def record_game(self, user_id, won, shots=0, hits=0):
+        """Итог одной партии."""
         if not user_id:
             return
         with sqlite3.connect(self.path) as conn:
@@ -324,6 +347,18 @@ class Profiles:
                     updated_at = excluded.updated_at''',
                 (user_id, 1 if won else 0, 0 if won else 1, shots, hits,
                  _now()))
+            conn.commit()
+
+    def add_stat(self, user_id, key, n=1):
+        """Счётчик действия: ход, попадание, промах, подсказка."""
+        if not user_id or key not in ('moves', 'hits', 'misses', 'hints'):
+            return
+        with sqlite3.connect(self.path) as conn:
+            conn.execute('INSERT OR IGNORE INTO stats (user_id) VALUES (?)',
+                         (user_id,))
+            conn.execute('UPDATE stats SET %s = %s + ?, updated_at = ? '
+                         'WHERE user_id = ?' % (key, key),
+                         (n, _now(), user_id))
             conn.commit()
 
 

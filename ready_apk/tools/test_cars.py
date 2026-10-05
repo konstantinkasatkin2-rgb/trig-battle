@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Проверки нового режима: машинки и препятствия (версия 0.5.0).
+"""Проверки нового режима: машинки и препятствия (версия 0.3.3).
 
 Модель игры: отдельного «нападающего» и «защитника» нет. Каждый игрок
 одновременно и защитник, и нападающий:
@@ -14,14 +14,21 @@
 Запуск:  python ready_apk/tools/test_cars.py
 """
 
+import io
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 import pygame                                            # noqa: E402
+import profiles as profiles_db                            # noqa: E402
+
+Profiles = profiles_db.Profiles
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 
 ok = True
 
@@ -73,8 +80,12 @@ def put_cars(app, who, pts):
     app.game['turn'] = who
 
 
-CORNERS = {'player1': [(-0.9, -0.9), (-0.9, 0.9), (-0.7, -0.7)],
-           'player2': [(0.9, -0.9), (0.9, 0.9), (0.7, -0.7)]}
+# клетки для машинок: за пределами единичной окружности, внутри квадрата
+# и не ближе двух клеток друг друг (иначе стянутся)
+# квадрата и не ближе двух клеток друг к другу (иначе ст��наются)
+CAR_CELLS_L = [(-1.0, -1.0), (-1.0, -0.7), (-1.0, -0.4), (-1.0, -0.2)]
+CAR_CELLS_R = [(-x, -y) for (x, y) in CAR_CELLS_L]
+CORNERS = {'player1': CAR_CELLS_L, 'player2': CAR_CELLS_R}
 
 
 def battle_app(cars=2, walls=0, play='local', human='player1'):
@@ -101,9 +112,13 @@ def battle_app(cars=2, walls=0, play='local', human='player1'):
 
 
 def do_move(app, un):
-    """Ход фигуры — с правильным turn (иначе ход не наш)."""
+    """Ход фигуры так, как это делает игрок: выбрать и нажать кнопку.
+
+    turn выставляется обязательно: чужая фигура за ход не едет.
+    """
     app.game['turn'] = app.car_owner(un)
-    app.select(un)
+    app.car_clear_sel()
+    app.car_select(un)
     app.car_make_move()
     return un['pts'][0]
 
@@ -130,7 +145,7 @@ def main():
     import trig_battle_pygame as g                       # noqa: E402
     globals().update(g.__dict__)
 
-    print('Проверка нового режима 0.5.0: машинки и препятствия')
+    print('Проверка нового режима 0.3.3: машинки и препятствия')
 
     # --- 1. флоты ---
     check(sum(FLEET_WALLS.values()) == 10 and
@@ -281,17 +296,59 @@ def main():
     check(abs(dx - GRID) < 1e-6,
           'прямой ход — ровно одна клетка: %r -> %r' % (before, car['pts'][0]),
           'прямой ход неверный: %r -> %r' % (before, car['pts'][0]))
-    car['dir'] = 7
-    before = car['pts'][0]
-    do_move(app, car)
-    ddx = abs(car['pts'][0][0] - before[0])
-    ddy = abs(car['pts'][0][1] - before[1])
+    # диагональ проверяем на машинке, которой есть куда ехать по
+    # диагонали: из угла квадрата ход был бы запрещён
+    diag = app.car_owner_cars('player1')[-1]
+    diag['dir'] = 7
+    before = diag['pts'][0]
+    do_move(app, diag)
+    ddx = abs(diag['pts'][0][0] - before[0])
+    ddy = abs(diag['pts'][0][1] - before[1])
     check(abs(ddx - ddy) < 1e-6 and abs(ddx - GRID) < 1e-6,
           'диагональный ход — тоже клетка по обеим осям',
           'диагональный ход неверный: (%.3f, %.3f)' % (ddx, ddy))
-    check(car['left'] == CAR_STEPS - 2,
+    check(car['left'] == CAR_STEPS - 1,
           'каждый ход тратит запас: осталось %d' % car['left'],
           'ходы не тратятся: осталось %d' % car['left'])
+
+    # --- 7a. выбрать можно не больше трёх машинок ---
+    app = battle_app(cars=3)
+    cars = app.car_owner_cars('player1')
+    check(len(cars) == 3,
+          'машинок на поле соперника: %d' % len(cars),
+          'машинок на поле соперника: %d' % len(cars))
+    for c in cars[:3]:
+        app.car_select(c)
+    check(len([c for c in app.car_selected() if c['type'] == 'car']) == 3,
+          'выбраны три машинки из трёх',
+          'выбрано %d машинок'
+          % len([c for c in app.car_selected() if c['type'] == 'car']))
+    before = {id(c): tuple(c['pts'][0]) for c in app.car_selected()}
+    app.game['turn'] = 'player1'
+    app.car_make_move()
+    moved = [c for c in cars[:3] if tuple(c['pts'][0]) != before[id(c)]]
+    check(len(moved) == 3,
+          '«Совершить ход» двигает все выбранные машинки (%d из 3)'
+          % len(moved),
+          'двинулись только %d из 3 машинок' % len(moved))
+    check(app.game['turn'] == 'player2',
+          'после хода выбирает соперник',
+          'ход остался у игрока: %s' % app.game['turn'])
+    # четвёртую машинку выбрать нельзя
+    app = battle_app(cars=4)
+    cars = app.car_owner_cars('player1')
+    if len(cars) == 4:
+        for c in cars[:3]:
+            app.car_select(c)
+        app.car_select(cars[3])
+        n_sel = len([c for c in app.car_selected() if c['type'] == 'car'])
+        check(n_sel == 3,
+              'четвёртую машинку выбрать нельзя (максимум %d)'
+              % app.CAR_SELECT_MAX,
+              'выбрано %d машинок вместо %d' % (n_sel, app.CAR_SELECT_MAX))
+    else:
+        check(False, 'машинок должно быть 4, а их %d' % len(cars),
+              'машинок %d, ожидалось 4' % len(cars))
 
     # --- 8. разворот у границы квадрата ---
     app = battle_app()
@@ -325,6 +382,8 @@ def main():
           'у границы машинка остаётся на клетке и разворачивается',
           'у границы: %r, направление %d' % (car['pts'][0], car['dir']))
     app.game['turn'] = app.car_owner(car)
+    app.car_clear_sel()
+    app.car_select(car)
     app.car_make_move()
     check(car['pts'][0] == (0.9, 0.0),
           'после разворота уезжает внутрь: %r' % (car['pts'][0],),
@@ -375,6 +434,15 @@ def main():
     # --- 11. кончились машинки: проигравший определён верно ---
     app = battle_app(cars=1)
     car = app.car_owner_cars('player2')[0]
+    # из угла квадрата
+    # машинка только
+    # разворачивается,
+    # поэтому ставим
+    # её у края, откуда
+    # уедет и потратит
+    # последний ход
+    car['pts'] = [(1.0, 0.6)]
+    car['dir'] = 3
     car['left'] = 1
     do_move(app, car)
     check(app.game['phase'] == 'over' and 'проиграл' in app.msg[0],
@@ -717,6 +785,148 @@ def main():
           'ход стены одинаков у обеих сторон: %r' % (wall['pts'],),
           'ходы разошлись: хост %r, клиент %r'
           % (wall['pts'], peer_walls[-1]['pts']))
+
+    # --- 21. панель нового режима: без тригонометрии ---
+    app = battle_app()
+    app.draw()
+    trig_widgets = [w for w in app.row_angles if w.visible]
+    trig_fields = [f for f in (app.f_sin, app.f_cos, app.f_tg, app.f_ctg)
+                   if f.visible]
+    check(not trig_widgets and not trig_fields,
+          'в новом режиме тригонометрических полей нет',
+          'в новом режиме видны тригонометрические элементы: '
+          '%d ползунков, %d полей' % (len(trig_widgets), len(trig_fields)))
+    panel = set(id(w) for w in app.row_cars)
+    left_over = [w.label for w in app.row_build
+                 if w is not None and w.visible and id(w) not in panel
+                 and w not in app.size_buttons]
+    check(not left_over,
+          'третий ряд (режимы, размеры, поворот) в новом режиме скрыт',
+          'в новом режиме видны лишние кнопки: %s' % left_over)
+    names = [b.label for b in app.row_cars]
+    check(names == ['Машинки', 'Стены', 'Готов', 'Совершить ход', 'Выход'],
+          'у нового режима своя панель: %s' % ', '.join(names),
+          'панель нового режима неверная: %s' % ', '.join(names))
+    check(app.btn_exit.rect.right <= app.W
+          and app.btn_exit.rect.top >= app.H - app.CTRL_H,
+          'кнопки панели помещаются в экран',
+          'панель вылезла за экран: %r' % (app.btn_exit.rect,))
+    check(app.btn_commit.visible is True and app.btn_ready.visible is False,
+          'в бою видна «Совершить ход», а «Готов» спрятана',
+          'кнопки хода показаны неверно: Готов=%s Ход=%s'
+          % (app.btn_ready.visible, app.btn_commit.visible))
+    app.game['phase'] = 'place'
+    app.draw()
+    check(app.btn_commit.visible is False and app.btn_ready.visible is True,
+          'на расстановке «Готов» есть, а «Совершить ход» — нет',
+          'на расстановке кнопки перепутаны: Готов=%s Ход=%s'
+          % (app.btn_ready.visible, app.btn_commit.visible))
+
+    # --- 22. выбор «Машинки»/«Стены» и запрет машинок в бою ---
+    app = battle_app()
+    app.car_set_kind('wall')
+    check(app.unit_state.get('car_kind_btn') == 'wall',
+          'кнопка «Стены» переключает, что ставим',
+          'переключение «Стены» не сработало')
+    app.car_set_kind('car')
+    check('ДО боя' in app.msg[0] or 'стены' in app.msg[0].lower(),
+          'в бою машинки ставить нельзя — сообщение объясняет почему',
+          'в бою можно выбрать машинки молча: %r' % app.msg[0])
+
+    # --- 23. после нового режима тригонометрия возвращается ---
+    app = new_app()
+    app.car_start('local')
+    app.show_screen('menu')
+    app.choose_diff('Средний')
+    check(any(w.visible for w in app.row_angles)
+          and any(f.visible for f in (app.f_sin, app.f_cos, app.f_tg,
+                                      app.f_ctg)),
+          'после нового режима тригонометрия снова на месте',
+          'после нового режима тригонометрия не вернулась: %s'
+          % app.mode['name'])
+    check(app.btn_aim1.visible and app.btn_shot1.visible
+          and not app.btn_wait.visible,
+          'в тригонометрии есть прицел и огонь, а «Ждать» спрятана',
+          'интерфейс тригонометрии после нового режима битый')
+    app.set_mode('angles')
+    app.set_angle1(35)
+    app.set_angle2(70)
+    app.update_angles()
+    app.draw()
+    check(set(app.aim_points_drawn) == {'P1', 'P2'},
+          'точки пересечения рисуются уже на расстановке: %s'
+          % app.aim_points_drawn,
+          'точки пересечения не нарисованы: %s' % app.aim_points_drawn)
+
+    # --- 24. после выхода из режима не остаётся последнего действия ---
+    app = battle_app()
+    app.set_msg('Ход сделан: машинка проехала', NAVY)
+    app.game['last'] = 'Машинка проехала на клетку'
+    app.show_screen('menu')
+    check(app.msg[0] == '' and app.game['last'] == '\u2014',
+          'после выхода из режима нижняя надпись чистая',
+          'после выхода осталось: %r / %r'
+          % (app.msg[0][:30], app.game['last']))
+
+    # --- 25. статистика игрока ---
+    app = new_app()
+    app.profile_db = Profiles(os.path.join(
+        tempfile.mkdtemp(), 'stats.db'))
+    acc = app.profile_db.register('stat@b.ru', 'pass1234', 'Счётчик')
+    app.set_user(acc)
+    check('Статистика' in [w.label for w in app.screens['menu']],
+          'вошедшему игроку кнопка «Статистика» есть в меню',
+          'в меню нет кнопки «Статистика»')
+    app.open_stats()
+    check(app.screen_name == 'stats',
+          'кнопка открывает экран статистики',
+          'экран статистики не открылся: %s' % app.screen_name)
+    app.game['my_moves'] = 3
+    app.stat_add('moves', 3)
+    app.stat_shot(True)
+    app.stat_shot(False)
+    # подсказку даём на поле с фигурами: на пустом её негде выдать
+    app.place_unit(app.FL, [(0.4, 0.4), (0.5, 0.4)], 0, 2, 'ship')
+    check(app.reveal_hint(app.FL),
+          'подсказка выдаётся и сразу записывается в статистику',
+          'подсказка не выдалась: поле пустое или счётчик сломан')
+    app.show_screen('game')
+    app.choose_diff('Средний')
+    app.show_victory('Победил Счётчик!')
+    txt = dict(line.split(':', 1) for line in app.stats_text()
+               if ':' in line)
+    check(int(txt['Ходов сделано'].strip()) == 3,
+          'статистика считает ходы: %s' % txt['Ходов сделано'].strip(),
+          'ходы не посчитаны: %s' % txt['Ходов сделано'].strip())
+    check(int(txt['Попаданий'].strip()) == 1
+          and int(txt['Промахов'].strip()) == 1,
+          'статистика считает попадания и промахи',
+          'попадания/промахи неверны: %s / %s'
+          % (txt['Попаданий'].strip(), txt['Промахов'].strip()))
+    check(int(txt['Подсказок взято'].strip()) == 1,
+          'статистика считает подсказки',
+          'подсказки не посчитаны: %s' % txt['Подсказок взято'].strip())
+    check(int(txt['Сыграно игр'].strip()) == 1
+          and int(txt['Побед'].strip()) == 1,
+          'статистика считает игры и победы',
+          'игры/победы неверны: %s / %s'
+          % (txt['Сыграно игр'].strip(), txt['Побед'].strip()))
+    st = app.profile_db.get_stats(acc['id'])
+    check(st['moves'] == 3 and st['games'] == 1 and st['wins'] == 1,
+          'в базе те же числа: %s' % st,
+          'в базе расхождение: %s' % st)
+    app.do_logout()
+    check('Статистика' not in [w.label for w in app.screens['menu']],
+          'после выхода кнопка статистики исчезает',
+          'кнопка «Статистика» осталась после выхода из профиля')
+
+    # --- 26. версия ---
+    spec = io.open(os.path.join(ROOT, 'ready_apk', 'buildozer.spec'),
+                   encoding='utf-8').read()
+    check('version = 0.3.3' in spec,
+          'в buildozer.spec версия 0.3.3',
+          'в buildozer.spec неверная версия: %s'
+          % [ln for ln in spec.splitlines() if 'version' in ln][:1])
 
     print()
     print('Итог: %s' % ('все проверки пройдены' if ok else 'ЕСТЬ ОШИБКИ'))
