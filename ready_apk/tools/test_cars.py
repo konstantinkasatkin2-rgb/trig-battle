@@ -30,6 +30,9 @@ Profiles = profiles_db.Profiles
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 
+# сколько ждём сообщений по сети в проверках (секунды)
+NET_WAIT = 15.0
+
 ok = True
 
 
@@ -693,7 +696,8 @@ def main():
     cli.net_role = 'client'
     cli.net_state = 'waiting'
     cli.net.search_code(host.net.code, udp_port=udp)
-    for _ in range(200):
+    deadline = time.time() + NET_WAIT
+    while time.time() < deadline:
         host._net_poll()
         cli._net_poll()
         if host.net_state == 'connected' and cli.net_state == 'connected':
@@ -714,19 +718,17 @@ def main():
 
     put_cars(host, 'player1', [(-0.9, -0.9), (-0.9, 0.9)])
     host.advance()
-    for _ in range(80):
+    deadline = time.time() + NET_WAIT
+    while time.time() < deadline and cli.game['phase'] != 'place':
+        host._net_poll()
         cli._net_poll()
-        cli.draw()
-        if cli.game['phase'] == 'place':
-            break
         time.sleep(0.02)
     put_cars(cli, cli.car_now(), [(0.9, -0.9), (0.9, 0.9)])
     cli.advance()
-    for _ in range(80):
+    deadline = time.time() + NET_WAIT
+    while time.time() < deadline:
         host._net_poll()
         cli._net_poll()
-        host.draw()
-        cli.draw()
         if host.game['phase'] == 'battle' and cli.game['phase'] == 'battle':
             break
         time.sleep(0.02)
@@ -758,9 +760,10 @@ def main():
     # состояние соперника смотрим на его стороне: у клиента наше
     # поле — это car_peer_fld() с его точки зрения
     peer_fld = cli.car_peer_fld(my_side)
-    for _ in range(60):
+    deadline = time.time() + NET_WAIT
+    while time.time() < deadline:
+        host._net_poll()
         cli._net_poll()
-        cli.draw()
         if [u for u in peer_fld['units'] if u['type'] == 'wall']:
             break
         time.sleep(0.02)
@@ -775,11 +778,11 @@ def main():
     wall = mine['units'][-1]
     wall['dir'] = 0
     do_move(host, wall)
-    for _ in range(60):
+    deadline = time.time() + NET_WAIT
+    while time.time() < deadline and peer_walls[-1]['pts'] != wall['pts']:
+        host._net_poll()
         cli._net_poll()
         cli.draw()
-        if peer_walls[-1]['pts'][0] != wall['pts'][0]:
-            break
         time.sleep(0.02)
     check(peer_walls[-1]['pts'] == wall['pts'],
           'ход стены одинаков у обеих сторон: %r' % (wall['pts'],),
